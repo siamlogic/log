@@ -1,0 +1,15 @@
+# Cloudflare Pages / Workers Configuration for CBT Activity Recording System
+name = "cbt-activity-record"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+pages_build_output_dir = ".vercel/output/static"
+
+# 本番環境変数 (シークレットは Cloudflare Pages ダッシュボードまたは wrangler secret put で設定)
+[vars]
+NODE_ENV = "production"
+
+# Cloudflare D1 データベースバインディング (エッジでD1を使用する場合に有効化)
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "cbt_production_db"
+# database_id = "<YOUR_D1_DATABASE_ID>"

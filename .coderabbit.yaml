@@ -1,0 +1,39 @@
+# CodeRabbit Configuration File
+# Documentation: https://docs.coderabbit.ai/guides/configure-coderabbit
+
+version: 2
+language: "ja-JP"
+tone_instructions: "丁寧かつ建設的、セキュリティと臨床データ整合性に厳しいプロフェッショナルなトーンでレビューしてください。"
+
+reviews:
+  profile: "assertive"
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "main"
+      - "master"
+
+chat:
+  auto_reply: true
+
+instructions: |
+  本プロジェクトは認知行動療法（CBT）における週間活動記録システム（Web / PWA）です。
+  以下のセキュリティ・臨床原則を最優先事項として厳格にレビューしてください：
+  1. 【最高水準の要配慮個人情報保護】:
+     システムに入力されるすべてのデータ（活動内容・気分・メモ・カルテ）は要配慮個人情報（メンタルヘルス情報）であり絶対秘匿です。
+     メンバー間のIDOR（水平権限昇格）や未認証アクセスを絶対に許容しないこと。
+  2. 【Data Access Layer (DAL) による厳格なアクセス分離】:
+     管理者専用の支援カルテ（admin_memo）は、メンバー本人には絶対に公開してはならない秘匿情報です。
+     メンバー向け処理の select 句や DTO 変換から確実に除外されているか確認してください。
+  3. 【単一サーバー・単一インスタンス大前提】:
+     分散クラスタや外部セッションストア（Redis等）を不要とし、Docker完全非使用（Node.jsネイティブプロセス、ローカルSQLite 3 WALモード、インメモリ・スライディングウィンドウ・レートリミッター）で運用する前提が維持されているか確認してください。
+  4. 【データ持ち出し防止（エクスポート機能全廃）】:
+     端末へのデータ残留やファイル紛失・誤送信事故を防ぐため、Excel/CSV等のエクスポート機能は一切設けない設計を厳守してください。
+  5. 【臨床的妥当性・気分の正規化】:
+     睡眠時や未入力枠は mood_score: null を厳守し、平均値計算で母数除外されているか確認してください（ダミー値 0.00 や 0.50 の混入防止）。
