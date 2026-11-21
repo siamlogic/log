@@ -33,6 +33,14 @@ export async function PUT(req: Request) {
       return NextResponse.json({ error: '時間枠は 0〜23 の整数を指定してください' }, { status: 400 });
     }
 
+    if (typeof activityName !== 'string' || activityName.trim().length === 0 || activityName.length > 255) {
+      return NextResponse.json({ error: '活動内容は 1〜255 文字以内で入力してください' }, { status: 400 });
+    }
+
+    if (notes && (typeof notes !== 'string' || notes.length > 2000)) {
+      return NextResponse.json({ error: 'メモは 2000 文字以内で入力してください' }, { status: 400 });
+    }
+
     const hasMood = moodScore !== null && moodScore !== undefined;
     let parsedMoodScore: number | null = null;
     let parsedRawLevel: number | null = null;

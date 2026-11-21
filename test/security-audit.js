@@ -3,11 +3,11 @@
  * 以下の攻撃ベクトルに対してローカルサーバー (http://localhost:3001) の防御耐性を実地検証
  * 1. タイミング攻撃・ユーザー列挙 (Timing Attack / User Enumeration)
  * 2. Fetch Metadata によるクロスサイト CSRF 攻撃
- * 3. 管理者招待 API への大量リクエスト DoS (Rate Limit Bypass Attack)
- * 4. 招待トークン総当たり攻撃によるアカウントロックアウト (Brute Force Token Guessing)
+ * 3. 招待トークン総当たり攻撃によるアカウントロックアウト (Brute Force Token Guessing)
+ * 4. 管理者招待 API への大量リクエスト DoS (Rate Limit Bypass Attack)
  * 5. 特殊文字・SQLi・不正ペイロード注入耐性
  * 6. XSS ペイロード注入耐性
- * 7. 長大文字・バッファ超過 DoS 攻撃耐性
+ * 7. 長大文字・バッファ超過 DoS 攻撃耐性 (パスワード / 活動名 / メモ)
  */
 
 const http = require('http');
@@ -73,9 +73,12 @@ async function runSecurityAudit() {
   const dummyEmail = 'nonexistent_' + Date.now() + '@example.com';
   const wrongPassword = 'WrongPassword999!';
 
-  // 存在するユーザーでのレスポンス時間計測 (5回計測の平均)
+  // ウォームアップ (JIT / モジュール初期ロードの初回遅延を排除)
+  await request({ path: '/api/auth/login', method: 'POST' }, JSON.stringify({ email: 'warmup@example.com', password: wrongPassword }));
+
+  // 存在するユーザーでのレスポンス時間計測 (4回計測の平均)
   const existingTimes = [];
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 4; i++) {
     const t0 = process.hrtime.bigint();
     await request(
       { path: '/api/auth/login', method: 'POST' },
@@ -85,9 +88,9 @@ async function runSecurityAudit() {
     existingTimes.push(Number(t1 - t0) / 1e6);
   }
 
-  // 存在しないユーザーでのレスポンス時間計測 (5回計測の平均)
+  // 存在しないユーザーでのレスポンス時間計測 (4回計測の平均)
   const dummyTimes = [];
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 4; i++) {
     const t0 = process.hrtime.bigint();
     await request(
       { path: '/api/auth/login', method: 'POST' },
@@ -105,10 +108,10 @@ async function runSecurityAudit() {
   console.log(`  > 未存在ユーザー平均応答時間: ${avgDummy.toFixed(1)}ms`);
   console.log(`  > 時間差異比率: ${(diffRatio * 100).toFixed(1)}%`);
 
-  // ダミーハッシュ消費により時間差が同等（比率差異が50%以内）であることを検証
+  // ダミーハッシュ＋ジッター遅延により時間差が同等（比率差異が35%以内）であることを検証
   assert(
-    diffRatio < 0.6,
-    'ユーザー列挙対策: 存在/未存在ユーザー間でArgon2id計算時間が均衡しておりレスポンス時間推測が困難',
+    diffRatio < 0.35,
+    'ユーザー列挙対策: 存在/未存在ユーザー間で応答時間が高度に均衡しており推測不能',
     `差異比率が ${(diffRatio * 100).toFixed(1)}%`
   );
 
@@ -150,9 +153,6 @@ async function runSecurityAudit() {
       'Origin': 'http://localhost:3001',
     }
   );
-  if (inviteTargetRes.status !== 201) {
-    console.log('招待レスポンスエラー:', inviteTargetRes.status, inviteTargetRes.body);
-  }
   assert(inviteTargetRes.status === 201, '招待発行成功 (201 Created)');
 
   // 偽のトークンで5回連続試行
@@ -202,7 +202,7 @@ async function runSecurityAudit() {
   }
   assert(rateLimitHit, 'DoS防御: 管理者招待 API への過剰リクエストを 429 Too Many Requests で遮断');
 
-  // --- 5. SQLi / 特殊文字インジェクション耐性 ---
+  // --- 5. 特殊文字 & SQL インジェクション (SQLi) 攻撃耐性 ---
   console.log('\n--- 5. 特殊文字 & SQL インジェクション (SQLi) 攻撃耐性 ---');
   const sqliPayloads = [
     "' OR '1'='1",
@@ -217,7 +217,6 @@ async function runSecurityAudit() {
       { path: '/api/auth/login', method: 'POST' },
       JSON.stringify({ email: payload, password: 'password' })
     );
-    // 500 (DBクラッシュ) や 200 (認証バイパス) にならず 401 または 400 で正しく拒絶されること
     if (res.status !== 401 && res.status !== 400) {
       sqliSafe = false;
       break;
@@ -225,7 +224,7 @@ async function runSecurityAudit() {
   }
   assert(sqliSafe, 'SQLi防御: 特殊文字・SQL構文の直接注入によるエラーや認証バイパスが発生しない');
 
-  // --- 6. XSS ペイロード注入耐性 ---
+  // --- 6. XSS ペイロード注入 & 無害化検証 ---
   console.log('\n--- 6. XSS ペイロード注入 & 無害化検証 ---');
   // 一般メンバーでログイン
   const memberLogin = await request(
@@ -255,7 +254,7 @@ async function runSecurityAudit() {
     'XSS防御: HTMLタグを含む文字列をDBに文字列リテラルとして安全に格納 (実行不能)'
   );
 
-  // --- 7. 長大文字 DoS 攻撃 (Buffer Overflow / Memory Exhaustion) ---
+  // --- 7. 長大文字 & メモリ枯渇 DoS 攻撃耐性 ---
   console.log('\n--- 7. 長大文字 & メモリ枯渇 DoS 攻撃耐性 ---');
   const hugePassword = 'A'.repeat(500); // 500文字のパスワード
   const dosRes = await request(
@@ -264,7 +263,46 @@ async function runSecurityAudit() {
   );
   assert(
     dosRes.status === 400,
-    '長大文字DoS防御: 128文字を超える長大パスワードはArgon2id計算前に 400 Bad Request で即座に遮断'
+    '長大パスワードDoS防御: 128文字を超える長大パスワードはArgon2id計算前に 400 Bad Request で即座に遮断'
+  );
+
+  // 長大活動名 (10,000文字)
+  const hugeActivityRes = await request(
+    { path: '/api/cbt/activities/slot', method: 'PUT' },
+    JSON.stringify({
+      recordDateYmd: '2026-11-21',
+      hourSlot: 10,
+      activityName: 'X'.repeat(10000),
+    }),
+    {
+      'Cookie': memberCookie,
+      'Host': 'localhost:3001',
+      'Origin': 'http://localhost:3001',
+    }
+  );
+  assert(
+    hugeActivityRes.status === 400,
+    '長大活動名DoS防御: 255文字を超える長大活動名は 400 Bad Request で即座に遮断'
+  );
+
+  // 長大メモ (5,000文字)
+  const hugeNotesRes = await request(
+    { path: '/api/cbt/activities/slot', method: 'PUT' },
+    JSON.stringify({
+      recordDateYmd: '2026-11-21',
+      hourSlot: 10,
+      activityName: '読書',
+      notes: 'N'.repeat(5000),
+    }),
+    {
+      'Cookie': memberCookie,
+      'Host': 'localhost:3001',
+      'Origin': 'http://localhost:3001',
+    }
+  );
+  assert(
+    hugeNotesRes.status === 400,
+    '長大メモDoS防御: 2000文字を超える長大メモは 400 Bad Request で即座に遮断'
   );
 
   console.log('\n===============================================================');
