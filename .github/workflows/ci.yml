@@ -44,7 +44,7 @@ jobs:
         run: npm run start &
 
       - name: Wait for Server Readiness
-        run: npx wait-on http://localhost:3001/api/auth/me --timeout 15000
+        run: npx wait-on http-get://127.0.0.1:3001/ --timeout 30000
 
       - name: Run Automated Test Suite (48 Tests)
         run: npm test
