@@ -9,6 +9,11 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: "file:./dev.db"
+      NEXTAUTH_SECRET: "cbt-ci-test-secret-32-characters-minimum"
+      MFA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      NODE_ENV: "test"
 
     steps:
       - name: Checkout Code
@@ -41,5 +46,8 @@ jobs:
       - name: Wait for Server Readiness
         run: npx wait-on http://localhost:3001/api/auth/me --timeout 15000
 
-      - name: Run Automated Test Suite (20 Tests)
+      - name: Run Automated Test Suite (48 Tests)
         run: npm test
+
+      - name: Run Security Audit Penetration Test (21 Tests)
+        run: node test/security-audit.js
