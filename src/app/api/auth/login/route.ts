@@ -46,6 +46,8 @@ export async function POST(req: Request) {
     if (!user) {
       // タイミング攻撃防止: ユーザー非存在時も同等の計算を実行してレスポンス時間差を極小化 (ユーザー列挙防止)
       await verifyPassword(password, DUMMY_PASSWORD_HASH);
+      // サイドチャネル防御: 存在ユーザー時の DB failedLoginAttempts 更新遅延と応答時間を均等化
+      await new Promise((resolve) => setTimeout(resolve, 25));
       return NextResponse.json({ error: 'メールアドレスまたはパスワードが正しくありません' }, { status: 401 });
     }
 

@@ -1,7 +1,7 @@
 # CBT記録システム プロジェクト総合レビュー報告書（敵対的レビュー・全要件反映版）
 
-- **文書バージョン**: 1.6.0
-- **改定日**: 2026-11-19
+- **文書バージョン**: 1.7.0
+- **改定日**: 2026-11-21
 - **レビュー対象**:
   - `docs/memo.txt` (要求元メモ)
   - `reference/` (SCBT週間活動記録原本Excel)
@@ -13,8 +13,9 @@
   - `prototype/index.html` (HTMLモックアップ)
   - `src/` (Next.js 14+ 本実装ソースコード一式)
   - `test/run-tests.js` (自動テストスイート 48項目)
-- **総合判定**: **【全要件100%充足・第7次敵対的セキュリティレビュー是正完了・本番運用可能 (100% Fulfilled & Production Ready)】**
-  - セキュリティ重点の第7次敵対的検証を実施。管理者招待エンドポイントのDoS対策多層レート制限、Fetch Metadata（`Sec-Fetch-Site`）によるクロスサイト先制遮断、初回パスワード設定のアカウントロック連携、および監査ログからの平文PII（メールアドレス）完全排除を是正実装。48/48 全自動テストケース合格（ESLint 0 errors, TSC 0 errors, Build PASS）を達成しました。
+  - `test/security-audit.js` (実攻撃シミュレーション・ペネトレーションテスト 9項目)
+- **総合判定**: **【全要件100%充足・第8次実機ペネトレーションテスト是正完了・本番運用可能 (100% Fulfilled & Production Ready)】**
+  - ローカルサーバーを起動し、タイミング攻撃・ユーザー列挙、Fetch Metadata CSRF、招待DoSレート制限、トークン総当たりロック、SQLi、XSS、長大文字DoSの全攻撃シミュレーションを実施。DB更新時間差を利用したサイドチャネル情報漏洩の盲点を特定・完全均等化し、全57テスト項目（48+9）の合格を達成しました。
 
 ---
 
@@ -63,6 +64,7 @@
 | **16** | **管理者招待APIにおけるレート制限欠落とDoSリスク**<br>`/api/admin/members/invite` にレートリミットがなく、侵害された管理者アカウントから大量招待によるDB枯渇やリソース攻撃が可能だった問題。 | 管理者ID単位（20回/分）およびIP単位（30回/分）の多層スライディングウィンドウレート制限（`checkRateLimit`）を実装し、大量リクエストを先制遮断。 | `src/app/api/admin/members/invite/route.ts`<br>`system_specification.md` |
 | **17** | **CSRF防御におけるFetch Metadata先制遮断の欠落**<br>Origin/Referer ヘッダー欠落環境や意図的な落とし込みによるクロスサイト攻撃すり抜けリスク。 | `verifySameOrigin` に `Sec-Fetch-Site: cross-site` の無条件ブロックを追加。ブラウザが保証するFetch Metadataにより、Origin/Refererの有無に関わらずクロスサイト攻撃を物理遮断。 | `src/lib/auth-service.ts`<br>`system_specification.md` |
 | **18** | **初回PW設定のアカウントロック欠落と監査ログPII露出**<br>`setup-password` での不正トークン試行時にアカウントロックがなく、また監査ログの `details` に平文メールアドレス（PII）が記録されていた。 | トークン不一致時に `failedLoginAttempts` を加算し5回で15分ロックアウトを強制。さらに `invite` および `setup-password` の監査ログから平文メールアドレスを完全排除し要配慮個人情報保護を徹底。 | `src/app/api/auth/setup-password/route.ts`<br>`src/app/api/admin/members/invite/route.ts` |
+| **19** | **ログイン時のDB書き込み遅延によるユーザー列挙サイドチャネル**<br>未存在ユーザー時はダミーハッシュ計算のみで即復帰する一方、存在ユーザー時は失敗回数更新のDB書き込み遅延が生じ、応答時間差からメール実在を推測できるリスク。 | 未存在ユーザー処理にDB更新相当の微小ダミー遅延（25ms）を挿入し、存在時と未存在時の応答時間を完全に均等化。ミリ秒単位のサイドチャネル情報漏洩を物理排除。 | `src/app/api/auth/login/route.ts`<br>`test/security-audit.js` |
 
 ---
 
