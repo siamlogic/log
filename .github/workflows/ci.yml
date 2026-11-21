@@ -49,5 +49,8 @@ jobs:
       - name: Run Automated Test Suite (48 Tests)
         run: npm test
 
+      - name: Re-seed Database for Security Audit
+        run: npm run db:seed
+
       - name: Run Security Audit Penetration Test (21 Tests)
         run: node test/security-audit.js
