@@ -62,7 +62,7 @@ export async function POST(req: Request) {
       // タイミング攻撃防止: ユーザー非存在時も同等の計算を実行してレスポンス時間差を極小化 (ユーザー列挙防止)
       await verifyPassword(password, DUMMY_PASSWORD_HASH);
       // サイドチャネル防御: 存在ユーザー時の SQLite failedLoginAttempts 更新遅延と応答時間を均等化 (ジッター込み)
-      const jitterMs = 10 + Math.floor(Math.random() * 8);
+      const jitterMs = 6 + Math.floor(Math.random() * 6);
       await new Promise((resolve) => setTimeout(resolve, jitterMs));
       return NextResponse.json({ error: 'メールアドレスまたはパスワードが正しくありません' }, { status: 401 });
     }

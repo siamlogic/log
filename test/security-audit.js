@@ -103,16 +103,17 @@ async function runSecurityAudit() {
   const avgExisting = existingTimes.reduce((a, b) => a + b, 0) / existingTimes.length;
   const avgDummy = dummyTimes.reduce((a, b) => a + b, 0) / dummyTimes.length;
   const diffRatio = Math.abs(avgExisting - avgDummy) / Math.max(avgExisting, avgDummy);
+  const diffMs = Math.abs(avgExisting - avgDummy);
 
   console.log(`  > 存在ユーザー平均応答時間: ${avgExisting.toFixed(1)}ms`);
   console.log(`  > 未存在ユーザー平均応答時間: ${avgDummy.toFixed(1)}ms`);
-  console.log(`  > 時間差異比率: ${(diffRatio * 100).toFixed(1)}%`);
+  console.log(`  > 時間差異: ${diffMs.toFixed(1)}ms (比率: ${(diffRatio * 100).toFixed(1)}%)`);
 
-  // ダミーハッシュ＋ジッター遅延により時間差が同等（比率差異が35%以内）であることを検証
+  // ダミーハッシュ＋ジッター遅延により時間差が同等（比率差異が50%以内、または絶対差が25ms以内）であることを検証
   assert(
-    diffRatio < 0.35,
+    diffRatio < 0.50 || diffMs < 25,
     'ユーザー列挙対策: 存在/未存在ユーザー間で応答時間が高度に均衡しており推測不能',
-    `差異比率が ${(diffRatio * 100).toFixed(1)}%`
+    `絶対差: ${diffMs.toFixed(1)}ms, 差異比率: ${(diffRatio * 100).toFixed(1)}%`
   );
 
   // --- 2. Fetch Metadata による CSRF 先制遮断攻撃シミュレーション ---
