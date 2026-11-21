@@ -1,0 +1,636 @@
+openapi: 3.0.3
+info:
+  title: CBT Weekly Activity Recording System API
+  description: |
+    CBT（認知行動療法）週間活動記録システム API仕様書。
+    全データは要配慮個人情報（メンタルヘルス情報・絶対秘匿）として厳格に管理されます。
+    ファイル持ち出しによる漏洩防止のため、エクスポートAPIは一切提供されません。
+  version: 1.0.0
+servers:
+  - url: http://localhost:3001/api
+    description: ローカル開発 / 検証環境
+
+paths:
+  /auth/login:
+    post:
+      summary: アカウントログイン & 2FA検証
+      description: メールアドレスとパスワードによる認証。連続5回失敗で15分ロックアウト。MFA有効時は2FAコードを検証。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: tanaka@example.com
+                password:
+                  type: string
+                  example: password123
+                mfaCode:
+                  type: string
+                  example: "123456"
+      responses:
+        '200':
+          description: ログイン成功または2FA要求
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/SessionUser'
+                  requireMfa:
+                    type: boolean
+        '401':
+          description: 認証情報不一致
+        '423':
+          description: アカウントロック中
+        '429':
+          description: レートリミット超過
+
+  /auth/logout:
+    post:
+      summary: セッションログアウト
+      responses:
+        '200':
+          description: ログアウト完了 (Cookie消去)
+
+  /auth/me:
+    get:
+      summary: 現在の認証ユーザーセッション取得
+      responses:
+        '200':
+          description: 認証ユーザーセッション情報取得成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/SessionUser'
+        '401':
+          description: 未認証
+
+  /auth/setup-password:
+    post:
+      summary: 招待・仮登録トークンによる初回パスワード設定
+      description: 管理者から招待されたメンバーが、48時間有効な招待トークンを用いてパスワードを設定し、本登録（運用開始）を完了します。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, token, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                token:
+                  type: string
+                  description: 招待時に発行されたワンタイムトークン
+                password:
+                  type: string
+                  minLength: 8
+                  description: 新しいパスワード
+      responses:
+        '200':
+          description: パスワード設定完了・セッション発行（運用開始）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  user:
+                    $ref: '#/components/schemas/SessionUser'
+        '400':
+          description: パスワードポリシー不適合または使用済みトークン
+        '401':
+          description: トークン不一致または有効期限切れ
+
+  /cbt/activities/week:
+    get:
+      summary: 週間活動記録マトリクス取得 (メンバー自身)
+      parameters:
+        - name: monday
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+            example: "2026-10-12"
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WeekActivitiesDTO'
+        '401':
+          description: 未認証
+
+  /cbt/activities/slot:
+    put:
+      summary: 1時間スロットの記録更新 (保存)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [recordDateYmd, hourSlot, activityName]
+              properties:
+                recordDateYmd:
+                  type: string
+                  format: date
+                hourSlot:
+                  type: integer
+                  minimum: 0
+                  maximum: 23
+                activityName:
+                  type: string
+                moodScore:
+                  type: number
+                  nullable: true
+                  minimum: 0.0
+                  maximum: 1.0
+                moodRawLevel:
+                  type: integer
+                  nullable: true
+                moodDisplaySymbol:
+                  type: string
+                  nullable: true
+                notes:
+                  type: string
+                  nullable: true
+      responses:
+        '200':
+          description: 保存完了
+
+    delete:
+      summary: 1時間スロットの記録消去 (クリア)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [recordDateYmd, hourSlot]
+              properties:
+                recordDateYmd:
+                  type: string
+                  format: date
+                  example: "2026-10-15"
+                hourSlot:
+                  type: integer
+                  minimum: 0
+                  maximum: 23
+                  example: 14
+      responses:
+        '200':
+          description: 消去完了
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+
+  /cbt/activities/range:
+    post:
+      summary: 連続スロット・就寝一括登録 (範囲入力支援)
+      description: 睡眠や連続作業など、複数時間枠（日跨ぎを含む）に同一の活動を一括反映します。睡眠時は気分未入力（null）を厳守します。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [startDateYmd, startHourSlot, durationHours, activityName]
+              properties:
+                startDateYmd:
+                  type: string
+                  format: date
+                  example: "2026-10-15"
+                startHourSlot:
+                  type: integer
+                  minimum: 0
+                  maximum: 23
+                  example: 23
+                durationHours:
+                  type: integer
+                  minimum: 1
+                  maximum: 24
+                  example: 8
+                activityName:
+                  type: string
+                  example: "就寝"
+                moodScore:
+                  type: number
+                  nullable: true
+                moodRawLevel:
+                  type: integer
+                  nullable: true
+                moodDisplaySymbol:
+                  type: string
+                  nullable: true
+                overwriteNonEmpty:
+                  type: boolean
+                  default: false
+                allowFirstSlotOverwrite:
+                  type: boolean
+                  default: true
+      responses:
+        '200':
+          description: 範囲一括登録成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  appliedCount:
+                    type: integer
+
+  /cbt/copy/day:
+    post:
+      summary: 過去日コピー実行
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sourceDateYmd, targetDateYmd]
+              properties:
+                sourceDateYmd:
+                  type: string
+                targetDateYmd:
+                  type: string
+                overwriteNonEmpty:
+                  type: boolean
+                  default: false
+                includeMood:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: コピー完了
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  copiedCount:
+                    type: integer
+
+  /cbt/copy/week:
+    post:
+      summary: 過去週一括コピー実行
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sourceMondayYmd, targetMondayYmd]
+              properties:
+                sourceMondayYmd:
+                  type: string
+                targetMondayYmd:
+                  type: string
+                overwriteNonEmpty:
+                  type: boolean
+                  default: false
+                includeMood:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: 一括コピー完了
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  copiedCount:
+                    type: integer
+
+  /cbt/templates:
+    get:
+      summary: 定型ルーティン・テンプレート一覧取得
+      responses:
+        '200':
+          description: テンプレート一覧取得成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ActivityTemplateDTO'
+
+  /cbt/templates/apply:
+    post:
+      summary: テンプレートを特定日に反映
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [templateId, targetDatesYmd]
+              properties:
+                templateId:
+                  type: string
+                targetDatesYmd:
+                  type: array
+                  items:
+                    type: string
+                    format: date
+                  maxItems: 31
+                overwriteNonEmpty:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: 反映完了
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  appliedCount:
+                    type: integer
+                    description: 反映された活動スロット（時間枠）の総数
+
+  /cbt/mood-config:
+    get:
+      summary: 気分・感情表現設定の取得
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MoodConfigDTO'
+    put:
+      summary: 気分・感情表現設定の更新
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoodConfigDTO'
+      responses:
+        '200':
+          description: 更新完了
+
+  /admin/members:
+    get:
+      summary: 担当メンバー一覧取得 (管理者専用)
+      parameters:
+        - name: includeHidden
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: 非表示（アーカイブ）設定されたメンバーを含めて取得するかどうか
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AdminMemberDTO'
+        '403':
+          description: 権限不足 (メンバーアクセス遮断)
+
+  /admin/members/invite:
+    post:
+      summary: メンバー仮登録および招待発行 (管理者専用)
+      description: 管理者が新規メンバーのメールアドレスと表示名を指定して仮登録を行い、初回パスワード設定用のセキュアなワンタイムトークン（有効期限48時間）を発行します。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, displayName]
+              properties:
+                email:
+                  type: string
+                  format: email
+                displayName:
+                  type: string
+                supportStatus:
+                  type: string
+                  enum: [active, paused]
+                  default: active
+      responses:
+        '201':
+          description: 仮登録・招待トークン発行完了
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  member:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      email:
+                        type: string
+                      displayName:
+                        type: string
+                      supportStatus:
+                        type: string
+                  inviteToken:
+                    type: string
+        '400':
+          description: 入力バリデーションエラー
+        '403':
+          description: 管理者権限不足
+        '409':
+          description: 既に登録済みのメールアドレス
+
+  /admin/members/{id}/activities/week:
+    get:
+      summary: 担当メンバーの週間活動記録閲覧 (管理者専用)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: monday
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 担当メンバーの週間活動記録取得成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  member:
+                    $ref: '#/components/schemas/AdminMemberDTO'
+                  weekData:
+                    $ref: '#/components/schemas/WeekActivitiesDTO'
+        '403':
+          description: 担当外メンバーへのアクセス拒否
+
+  /admin/members/{id}/memo:
+    put:
+      summary: 支援者専用非公開メモ (カルテ) 更新
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [adminMemo]
+              properties:
+                adminMemo:
+                  type: string
+      responses:
+        '200':
+          description: カルテ更新完了
+
+  /admin/members/{id}/visibility:
+    patch:
+      summary: メンバー一覧表示/アーカイブ切替 (PATCH)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [isVisible]
+              properties:
+                isVisible:
+                  type: boolean
+                supportStatus:
+                  type: string
+                  enum: [active, paused, completed]
+      responses:
+        '200':
+          description: 切替完了
+    put:
+      summary: メンバー一覧表示/アーカイブ切替 (PUT互換)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [isVisible]
+              properties:
+                isVisible:
+                  type: boolean
+                supportStatus:
+                  type: string
+                  enum: [active, paused, completed]
+      responses:
+        '200':
+          description: 切替完了
+
+components:
+  schemas:
+    SessionUser:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+          enum: [member, admin, system_admin]
+        displayName:
+          type: string
+
+    WeekActivitiesDTO:
+      type: object
+      properties:
+        mondayDateStr:
+          type: string
+        days:
+          type: object
+          description: mon, tue, wed, thu, fri, sat, sun の各曜日スロットデータ
+
+    ActivityTemplateDTO:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        isPreset:
+          type: boolean
+        templateType:
+          type: string
+        slots:
+          type: object
+          additionalProperties:
+            type: string
+          description: 時間枠 (0-23) をキー、活動名を値とするマップ
+
+    MoodConfigDTO:
+      type: object
+      properties:
+        emotionLabel:
+          type: string
+        styleType:
+          type: string
+          enum: [weather, face, pawapuro, arrow, number]
+        scaleSteps:
+          type: integer
+          minimum: 3
+          maximum: 11
+
+    AdminMemberDTO:
+      type: object
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        email:
+          type: string
+        supportStatus:
+          type: string
+        isVisible:
+          type: boolean
+        adminMemo:
+          type: string
+          description: 担当管理者専用（メンバー向けDTOには含まれません）

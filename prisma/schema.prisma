@@ -1,0 +1,143 @@
+// Prisma Schema for CBT Activity Recording System
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ユーザー認証・アカウント管理テーブル
+model User {
+  id                   String                 @id @default(uuid())
+  email                String                 @unique
+  passwordHash         String                 @map("password_hash")
+  role                 String                 @default("member") // "member" | "admin" | "system_admin"
+  status               String                 @default("active") @map("status") // "invited" | "active" | "suspended"
+  failedLoginAttempts  Int                    @default(0) @map("failed_login_attempts")
+  lockedUntil          DateTime?              @map("locked_until")
+  mfaEnabled           Boolean                @default(false) @map("mfa_enabled")
+  mfaSecret            String?                @map("mfa_secret") // AES-256-GCM暗号化 (v1:iv:tag:data)
+  mfaRecoveryCodes     String?                @map("mfa_recovery_codes") // SHA-256ハッシュJSON
+  lastTotpStep         BigInt?                @map("last_totp_step") // リプレイ攻撃防止
+  tokenVersion         Int                    @default(0) @map("token_version") // セッション即時無効化
+  resetToken           String?                @map("reset_token")
+  resetExpiresAt       DateTime?              @map("reset_expires_at")
+  createdAt            DateTime               @default(now()) @map("created_at")
+  updatedAt            DateTime               @updatedAt @map("updated_at")
+
+  profile              UserProfile?
+  moodConfiguration    MoodConfiguration?
+  activities           CbtActivity[]
+  templates            ActivityTemplate[]
+  
+  // 管理者としてのリレーション
+  adminRelations       AdminMemberRelation[]  @relation("AdminUser")
+  // メンバーとしてのリレーション
+  memberRelations      AdminMemberRelation[]  @relation("MemberUser")
+
+  @@map("users")
+}
+
+// ユーザー付帯プロフィール
+model UserProfile {
+  userId      String   @id @map("user_id")
+  displayName String   @map("display_name")
+  avatarColor String   @default("bg-teal-100 text-teal-800") @map("avatar_color")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_profiles")
+}
+
+// 管理者-メンバー担当関係 & 非公開カルテメモ
+model AdminMemberRelation {
+  id            String    @id @default(uuid())
+  adminId       String    @map("admin_id")
+  memberId      String    @map("member_id")
+  supportStatus String    @default("active") @map("support_status") // "active" | "paused" | "completed"
+  isVisible     Boolean   @default(true) @map("is_visible")
+  adminMemo     String?   @map("admin_memo") // 本人非公開カルテ (DAL経由でのみアクセス)
+  memoUpdatedAt DateTime? @map("memo_updated_at")
+  memoUpdatedBy String?   @map("memo_updated_by")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  admin         User      @relation("AdminUser", fields: [adminId], references: [id], onDelete: Cascade)
+  member        User      @relation("MemberUser", fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([adminId, memberId])
+  @@index([memberId])
+  @@map("admin_member_relations")
+}
+
+// 気分・感情表現カスタマイズ設定
+model MoodConfiguration {
+  userId       String   @id @map("user_id")
+  emotionLabel String   @default("気分の良さ") @map("emotion_label")
+  styleType    String   @default("weather") @map("style_type") // "weather" | "face" | "pawapuro" | "arrow" | "number"
+  scaleSteps   Int      @default(5) @map("scale_steps") // 3〜11
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("mood_configurations")
+}
+
+// CBT 1時間スロット活動記録
+model CbtActivity {
+  id                String   @id @default(uuid())
+  userId            String   @map("user_id")
+  recordDate        DateTime @map("record_date") // YYYY-MM-DD (UTC 00:00:00)
+  hourSlot          Int      @map("hour_slot")   // 0〜23
+  activityName      String   @map("activity_name")
+  moodScore         Float?   @map("mood_score")  // 0.00〜1.00 (未記録・睡眠時は null 厳守)
+  moodRawLevel      Int?     @map("mood_raw_level")
+  moodDisplaySymbol String?  @map("mood_display_symbol")
+  notes             String?  @map("notes")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, recordDate, hourSlot])
+  @@index([userId, recordDate])
+  @@map("cbt_activities")
+}
+
+// 活動予定テンプレート (活動内容のみ反映)
+model ActivityTemplate {
+  id           String   @id @default(uuid())
+  userId       String?  @map("user_id") // nullの場合は共通プリセット
+  name         String
+  isPreset     Boolean  @default(false) @map("is_preset")
+  templateType String   @default("day") @map("template_type") // "day" | "week"
+  scheduleData String   @map("schedule_data") // JSON文字列
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user         User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("activity_templates")
+}
+
+// 監査ログ (機微テキスト平文保存禁止)
+model AuditLog {
+  id           String   @id @default(uuid())
+  actorId      String   @map("actor_id")
+  targetUserId String?  @map("target_user_id")
+  action       String   // "LOGIN", "VIEW_MEMBER", "UPDATE_MEMO", "APPLY_TEMPLATE" 等
+  ipAddress    String?  @map("ip_address")
+  userAgent    String?  @map("user_agent")
+  details      String?  // JSON文字列メタデータ (機微テキスト除外)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
+  @@map("audit_logs")
+}
