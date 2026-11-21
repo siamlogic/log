@@ -76,10 +76,17 @@ fi
 
 # 4. 事前検証成功後、既存DBファイル群を一括安全退避
 OLD_BACKUP_DIR="prisma/old_db_backup/$(date +%Y%m%d_%H%M%S)"
-mkdir -p "${OLD_BACKUP_DIR}"
-mv prisma/dev.db "${OLD_BACKUP_DIR}/dev.db" 2>/dev/null || true
-mv prisma/dev.db-wal "${OLD_BACKUP_DIR}/dev.db-wal" 2>/dev/null || true
-mv prisma/dev.db-shm "${OLD_BACKUP_DIR}/dev.db-shm" 2>/dev/null || true
+mkdir -p "${OLD_BACKUP_DIR}" || { echo "退避先ディレクトリの作成に失敗したため復元を中断します。" >&2; rm -rf "${RESTORE_WORK_DIR}"; exit 1; }
+
+for f in prisma/dev.db prisma/dev.db-wal prisma/dev.db-shm; do
+  if [ -f "$f" ]; then
+    mv "$f" "${OLD_BACKUP_DIR}/$(basename "$f")" || {
+      echo "既存ファイル ${f} の退避に失敗したため復元を中断します。" >&2
+      rm -rf "${RESTORE_WORK_DIR}"
+      exit 1
+    }
+  fi
+done
 
 # 5. 検証済みDBファイルの配置
 if ! cp "${RESTORE_WORK_DIR}/restore.db" prisma/dev.db; then
