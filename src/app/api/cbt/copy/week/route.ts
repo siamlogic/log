@@ -16,8 +16,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: '認証が必要です' }, { status: 401 });
   }
 
+  let body: any;
   try {
-    const { sourceMondayYmd, targetMondayYmd, overwriteNonEmpty, includeMood } = await req.json();
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'リクエストボディが正しいJSON形式ではありません' }, { status: 400 });
+  }
+
+  try {
+    const { sourceMondayYmd, targetMondayYmd, overwriteNonEmpty, includeMood } = body;
 
     if (!sourceMondayYmd || !targetMondayYmd) {
       return NextResponse.json({ error: 'コピー元とコピー先の週（月曜日）を指定してください' }, { status: 400 });

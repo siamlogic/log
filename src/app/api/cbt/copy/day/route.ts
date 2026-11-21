@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getCurrentSessionUser, verifySameOrigin } from '@/lib/auth-service';
 import { copyDayActivities } from '@/lib/dal/cbt';
 import { logAudit } from '@/lib/audit';
+import { isValidYmd } from '@/lib/date-utils';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,15 +16,22 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: '認証が必要です' }, { status: 401 });
   }
 
+  let body: any;
   try {
-    const { sourceDateYmd, targetDateYmd, overwriteNonEmpty, includeMood } = await req.json();
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'リクエストボディが正しいJSON形式ではありません' }, { status: 400 });
+  }
+
+  try {
+    const { sourceDateYmd, targetDateYmd, overwriteNonEmpty, includeMood } = body;
 
     if (!sourceDateYmd || !targetDateYmd) {
       return NextResponse.json({ error: 'コピー元とコピー先の日付を指定してください' }, { status: 400 });
     }
 
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(sourceDateYmd) || !/^\d{4}-\d{2}-\d{2}$/.test(targetDateYmd)) {
-      return NextResponse.json({ error: '日付フォーマットが不正です (YYYY-MM-DD)' }, { status: 400 });
+    if (!isValidYmd(sourceDateYmd) || !isValidYmd(targetDateYmd)) {
+      return NextResponse.json({ error: '実在する有効な日付（YYYY-MM-DD）を指定してください' }, { status: 400 });
     }
 
     const result = await copyDayActivities(user.id, {

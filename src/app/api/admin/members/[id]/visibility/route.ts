@@ -19,9 +19,19 @@ export async function PATCH(
   }
 
   const targetMemberId = params.id;
+  if (!targetMemberId || typeof targetMemberId !== 'string' || targetMemberId.length > 64) {
+    return NextResponse.json({ error: 'メンバーIDの指定が不正です' }, { status: 400 });
+  }
+
+  let body: any;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'リクエストボディが正しいJSON形式ではありません' }, { status: 400 });
+  }
 
   try {
-    const { isVisible, supportStatus } = await req.json();
+    const { isVisible, supportStatus } = body;
 
     if (supportStatus !== undefined && !['active', 'paused', 'completed'].includes(supportStatus)) {
       return NextResponse.json({ error: 'supportStatus は active, paused, completed のいずれかを指定してください' }, { status: 400 });

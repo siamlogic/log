@@ -32,8 +32,9 @@ export function checkRateLimit(
   maxRequests: number = 10,
   windowMs: number = 60000
 ): RateLimitResult {
+  const safeId = typeof identifier === 'string' && identifier.length > 128 ? identifier.slice(0, 128) : (identifier || 'unknown');
   const now = Date.now();
-  let record = rateLimitMap.get(identifier);
+  let record = rateLimitMap.get(safeId);
 
   if (!record) {
     // 容量制限: 最大エントリ数を超過した場合は最古のエントリを削除
@@ -42,11 +43,11 @@ export function checkRateLimit(
       if (oldestKey) rateLimitMap.delete(oldestKey);
     }
     record = { timestamps: [] };
-    rateLimitMap.set(identifier, record);
+    rateLimitMap.set(safeId, record);
   } else {
     // Map の順序を最新にリフレッシュ (LRU動作)
-    rateLimitMap.delete(identifier);
-    rateLimitMap.set(identifier, record);
+    rateLimitMap.delete(safeId);
+    rateLimitMap.set(safeId, record);
   }
 
   // Filter timestamps within current window

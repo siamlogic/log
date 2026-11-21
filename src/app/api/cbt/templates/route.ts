@@ -32,8 +32,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: '認証が必要です' }, { status: 401 });
   }
 
+  let body: any;
   try {
-    const { name, scheduleData } = await req.json();
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'リクエストボディが正しいJSON形式ではありません' }, { status: 400 });
+  }
+
+  try {
+    const { name, scheduleData } = body;
     if (!name || !scheduleData) {
       return NextResponse.json({ error: 'テンプレート名とスケジュールデータを指定してください' }, { status: 400 });
     }
@@ -46,7 +53,28 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'スケジュールデータは時間スロットオブジェクト形式で指定してください' }, { status: 400 });
     }
 
-    const created = await saveCustomTemplate(user.id, { name: name.trim(), scheduleData });
+    // スケジュールデータの厳密なキー・値バリデーション & プロトタイプ汚染対策
+    const cleanSchedule: Record<string, string> = {};
+    const entries = Object.entries(scheduleData);
+    if (entries.length > 24) {
+      return NextResponse.json({ error: 'スケジュールデータは最大24枠（0〜23時）です' }, { status: 400 });
+    }
+
+    for (const [key, val] of entries) {
+      if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+        return NextResponse.json({ error: '不正なプロパティキーが含まれています' }, { status: 400 });
+      }
+      const hour = Number(key);
+      if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+        return NextResponse.json({ error: '時間枠キーは 0〜23 の整数を指定してください' }, { status: 400 });
+      }
+      if (typeof val !== 'string' || val.trim().length === 0 || val.length > 255) {
+        return NextResponse.json({ error: 'テンプレート枠の活動名は 1〜255 文字以内で入力してください' }, { status: 400 });
+      }
+      cleanSchedule[String(hour)] = val.trim();
+    }
+
+    const created = await saveCustomTemplate(user.id, { name: name.trim(), scheduleData: cleanSchedule });
 
     await logAudit({
       actorId: user.id,

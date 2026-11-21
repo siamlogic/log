@@ -28,15 +28,22 @@ export async function POST(req: Request) {
     );
   }
 
+  let body: any;
   try {
-    const { email, displayName, supportStatus } = await req.json();
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'リクエストボディが正しいJSON形式ではありません' }, { status: 400 });
+  }
+
+  try {
+    const { email, displayName, supportStatus } = body;
 
     if (!email || !displayName) {
       return NextResponse.json({ error: 'メールアドレスと氏名を入力してください' }, { status: 400 });
     }
 
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return NextResponse.json({ error: '有効なメールアドレス形式を入力してください' }, { status: 400 });
+    if (typeof email !== 'string' || email.length > 255 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return NextResponse.json({ error: '有効なメールアドレス形式を入力してください（最大255文字）' }, { status: 400 });
     }
 
     if (typeof displayName !== 'string' || displayName.trim().length === 0 || displayName.length > 50) {

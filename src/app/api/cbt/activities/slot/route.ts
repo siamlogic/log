@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getCurrentSessionUser, verifySameOrigin } from '@/lib/auth-service';
 import { upsertActivitySlot, deleteActivitySlot } from '@/lib/dal/cbt';
 import { logAudit } from '@/lib/audit';
+import { isValidYmd } from '@/lib/date-utils';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,8 +16,14 @@ export async function PUT(req: Request) {
     return NextResponse.json({ error: '認証が必要です' }, { status: 401 });
   }
 
+  let body: any;
   try {
-    const body = await req.json();
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'リクエストボディが正しいJSON形式ではありません' }, { status: 400 });
+  }
+
+  try {
     const { recordDateYmd, hourSlot, activityName, moodScore, moodRawLevel, moodDisplaySymbol, notes } = body;
 
     if (!recordDateYmd || hourSlot === undefined || !activityName) {
@@ -24,8 +31,8 @@ export async function PUT(req: Request) {
     }
 
     // 境界値・入力バリデーション
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(recordDateYmd)) {
-      return NextResponse.json({ error: '日付フォーマットが不正です (YYYY-MM-DD)' }, { status: 400 });
+    if (!isValidYmd(recordDateYmd)) {
+      return NextResponse.json({ error: '実在する有効な日付（YYYY-MM-DD）を指定してください' }, { status: 400 });
     }
 
     const hour = Number(hourSlot);
@@ -92,14 +99,21 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ error: '認証が必要です' }, { status: 401 });
   }
 
+  let body: any;
   try {
-    const { recordDateYmd, hourSlot } = await req.json();
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'リクエストボディが正しいJSON形式ではありません' }, { status: 400 });
+  }
+
+  try {
+    const { recordDateYmd, hourSlot } = body;
     if (!recordDateYmd || hourSlot === undefined) {
       return NextResponse.json({ error: '必須パラメータが不足しています' }, { status: 400 });
     }
 
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(recordDateYmd)) {
-      return NextResponse.json({ error: '日付フォーマットが不正です (YYYY-MM-DD)' }, { status: 400 });
+    if (!isValidYmd(recordDateYmd)) {
+      return NextResponse.json({ error: '実在する有効な日付（YYYY-MM-DD）を指定してください' }, { status: 400 });
     }
 
     const hour = Number(hourSlot);

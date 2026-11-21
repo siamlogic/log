@@ -19,9 +19,19 @@ export async function PUT(
   }
 
   const targetMemberId = params.id;
+  if (!targetMemberId || typeof targetMemberId !== 'string' || targetMemberId.length > 64) {
+    return NextResponse.json({ error: 'メンバーIDの指定が不正です' }, { status: 400 });
+  }
+
+  let body: any;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'リクエストボディが正しいJSON形式ではありません' }, { status: 400 });
+  }
 
   try {
-    const { adminMemo } = await req.json();
+    const { adminMemo } = body;
 
     if (adminMemo !== null && adminMemo !== undefined) {
       if (typeof adminMemo !== 'string' || adminMemo.length > 10000) {

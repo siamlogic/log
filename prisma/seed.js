@@ -165,6 +165,23 @@ async function main() {
     }
   });
 
+  // 利用停止アカウント (セキュリティ遮断テスト用)
+  await prisma.user.create({
+    data: {
+      id: 'member-suspended',
+      email: 'suspended@example.com',
+      passwordHash: defaultPwHash,
+      role: 'member',
+      status: 'suspended',
+      profile: {
+        create: {
+          displayName: '利用停止 ユーザー',
+          avatarColor: 'bg-red-100 text-red-800'
+        }
+      }
+    }
+  });
+
   // 3. 管理者-メンバー担当関係 & 非公開カルテメモ
   await prisma.adminMemberRelation.create({
     data: {

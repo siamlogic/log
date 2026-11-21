@@ -32,8 +32,15 @@ export async function PUT(req: Request) {
     return NextResponse.json({ error: '認証が必要です' }, { status: 401 });
   }
 
+  let body: any;
   try {
-    const { emotionLabel, styleType, scaleSteps } = await req.json();
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'リクエストボディが正しいJSON形式ではありません' }, { status: 400 });
+  }
+
+  try {
+    const { emotionLabel, styleType, scaleSteps } = body;
 
     if (!emotionLabel || !styleType || scaleSteps === undefined) {
       return NextResponse.json({ error: '必須パラメータが不足しています' }, { status: 400 });

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getCurrentSessionUser, verifySameOrigin } from '@/lib/auth-service';
 import { applyTemplateToDays } from '@/lib/dal/cbt';
 import { logAudit } from '@/lib/audit';
+import { isValidYmd } from '@/lib/date-utils';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,11 +16,22 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: '認証が必要です' }, { status: 401 });
   }
 
+  let body: any;
   try {
-    const { templateId, targetDatesYmd, overwriteNonEmpty } = await req.json();
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'リクエストボディが正しいJSON形式ではありません' }, { status: 400 });
+  }
+
+  try {
+    const { templateId, targetDatesYmd, overwriteNonEmpty } = body;
 
     if (!templateId || !targetDatesYmd || !Array.isArray(targetDatesYmd) || targetDatesYmd.length === 0) {
       return NextResponse.json({ error: '必須パラメータが不足しています' }, { status: 400 });
+    }
+
+    if (typeof templateId !== 'string' || templateId.length > 64) {
+      return NextResponse.json({ error: 'テンプレートIDの指定が不正です' }, { status: 400 });
     }
 
     if (targetDatesYmd.length > 31) {
@@ -27,8 +39,8 @@ export async function POST(req: Request) {
     }
 
     for (const d of targetDatesYmd) {
-      if (typeof d !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(d)) {
-        return NextResponse.json({ error: '日付フォーマットが不正です (YYYY-MM-DD)' }, { status: 400 });
+      if (!isValidYmd(d)) {
+        return NextResponse.json({ error: '実在する有効な日付（YYYY-MM-DD）を指定してください' }, { status: 400 });
       }
     }
 
@@ -47,7 +59,11 @@ export async function POST(req: Request) {
     const res = NextResponse.json(result);
     res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     return res;
-  } catch (error) {
+  } catch (error: unknown) {
+    const err = error as Error;
+    if (err.message && err.message.includes('Template not found')) {
+      return NextResponse.json({ error: '指定されたテンプレートが見つからないか、アクセス権がありません' }, { status: 404 });
+    }
     console.error('Failed to apply template:', error);
     return NextResponse.json({ error: 'テンプレート適用に失敗しました' }, { status: 500 });
   }

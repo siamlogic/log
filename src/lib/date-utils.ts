@@ -20,6 +20,21 @@ export function parseYmdToUtcDate(ymd: string): Date {
   return date;
 }
 
+/**
+ * 指定した文字列が実在するカレンダー日付（YYYY-MM-DD）であるかを判定
+ */
+export function isValidYmd(ymd: string): boolean {
+  if (typeof ymd !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+    return false;
+  }
+  try {
+    parseYmdToUtcDate(ymd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function formatUtcDateToYmd(date: Date): string {
   const y = date.getUTCFullYear();
   const m = String(date.getUTCMonth() + 1).padStart(2, '0');

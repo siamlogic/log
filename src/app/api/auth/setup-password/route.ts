@@ -12,18 +12,34 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'CSRF検証に失敗しました (不正なオリジン)' }, { status: 403 });
   }
 
+  let body: any;
   try {
-    const { email, token, password } = await req.json();
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'リクエストボディが正しいJSON形式ではありません' }, { status: 400 });
+  }
+
+  try {
+    const { email, token, password } = body;
 
     if (!email || !token || !password) {
       return NextResponse.json({ error: 'メールアドレス、招待トークン、新しいパスワードを入力してください' }, { status: 400 });
+    }
+
+    if (typeof email !== 'string' || email.length > 255) {
+      return NextResponse.json({ error: 'メールアドレスの形式が不正です（最大255文字）' }, { status: 400 });
+    }
+
+    if (typeof token !== 'string' || token.length > 128) {
+      return NextResponse.json({ error: '招待トークンの形式が不正です' }, { status: 400 });
     }
 
     if (typeof password !== 'string' || password.length < 8 || password.length > 128) {
       return NextResponse.json({ error: 'パスワードは8文字以上128文字以内で設定してください' }, { status: 400 });
     }
 
-    const ip = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || '127.0.0.1';
+    const rawIp = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || '127.0.0.1';
+    const ip = rawIp.split(',')[0].trim().slice(0, 45);
     const rateCheck = checkRateLimit(`setup-password:${ip}`, 10, 60000);
     if (!rateCheck.success) {
       return NextResponse.json(
@@ -32,8 +48,8 @@ export async function POST(req: Request) {
       );
     }
 
-    const cleanEmail = String(email).trim().toLowerCase();
-    const cleanToken = String(token).trim();
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanToken = token.trim();
 
     const user = await prisma.user.findUnique({
       where: { email: cleanEmail },
@@ -42,6 +58,11 @@ export async function POST(req: Request) {
 
     if (!user || !user.resetToken || !user.resetExpiresAt) {
       return NextResponse.json({ error: '無効な招待リンクまたはトークンです' }, { status: 400 });
+    }
+
+    // 利用停止アカウントのパスワード設定遮断
+    if (user.status === 'suspended') {
+      return NextResponse.json({ error: 'このアカウントは利用停止されています。' }, { status: 403 });
     }
 
     // アカウントロック判定 (5回失敗で15分ロック)

@@ -305,6 +305,184 @@ async function runSecurityAudit() {
     '長大メモDoS防御: 2000文字を超える長大メモは 400 Bad Request で即座に遮断'
   );
 
+  // --- 8. 停止アカウント & 仮登録アカウントのログイン遮断 ---
+  console.log('\n--- 8. 停止アカウント & 仮登録アカウントのログイン遮断 ---');
+  const suspendedLoginRes = await request(
+    { path: '/api/auth/login', method: 'POST' },
+    JSON.stringify({ email: 'suspended@example.com', password: 'password123' }),
+    {
+      'Host': 'localhost:3001',
+      'Origin': 'http://localhost:3001',
+    }
+  );
+  assert(
+    suspendedLoginRes.status === 403,
+    '利用停止アカウント遮断: status: suspended アカウントは 403 Forbidden でログイン拒絶'
+  );
+
+  const invitedLoginRes = await request(
+    { path: '/api/auth/login', method: 'POST' },
+    JSON.stringify({ email: targetEmail, password: 'password123' }),
+    {
+      'Host': 'localhost:3001',
+      'Origin': 'http://localhost:3001',
+    }
+  );
+  assert(
+    invitedLoginRes.status === 401,
+    '仮登録アカウント遮断: status: invited アカウントは通常ログイン不可 (401 & 招待リンク案内)'
+  );
+
+  // --- 9. 不正・非実在日付 (2月31日等) による 500 クラッシュ攻撃耐性 ---
+  console.log('\n--- 9. 不正・非実在日付 (2月31日等) による 500 クラッシュ攻撃耐性 ---');
+  const invalidDateSlotRes = await request(
+    { path: '/api/cbt/activities/slot', method: 'PUT' },
+    JSON.stringify({
+      recordDateYmd: '2026-02-31',
+      hourSlot: 10,
+      activityName: '散歩',
+    }),
+    {
+      'Cookie': memberCookie,
+      'Host': 'localhost:3001',
+      'Origin': 'http://localhost:3001',
+    }
+  );
+  assert(
+    invalidDateSlotRes.status === 400,
+    'スロット非実在日付防御: 2026-02-31 の登録は 500 クラッシュせず 400 Bad Request で遮断'
+  );
+
+  const invalidDateRangeRes = await request(
+    { path: '/api/cbt/activities/range', method: 'POST' },
+    JSON.stringify({
+      startDateYmd: '2026-02-31',
+      startHourSlot: 0,
+      durationHours: 6,
+      activityName: '睡眠',
+    }),
+    {
+      'Cookie': memberCookie,
+      'Host': 'localhost:3001',
+      'Origin': 'http://localhost:3001',
+    }
+  );
+  assert(
+    invalidDateRangeRes.status === 400,
+    '範囲非実在日付防御: 2026-02-31 の連続登録は 500 クラッシュせず 400 Bad Request で遮断'
+  );
+
+  const invalidDateDayCopyRes = await request(
+    { path: '/api/cbt/copy/day', method: 'POST' },
+    JSON.stringify({
+      sourceDateYmd: '2026-02-31',
+      targetDateYmd: '2026-11-21',
+      overwriteNonEmpty: false,
+      includeMood: false,
+    }),
+    {
+      'Cookie': memberCookie,
+      'Host': 'localhost:3001',
+      'Origin': 'http://localhost:3001',
+    }
+  );
+  assert(
+    invalidDateDayCopyRes.status === 400,
+    '日コピー非実在日付防御: 2026-02-31 の日コピーは 500 クラッシュせず 400 Bad Request で遮断'
+  );
+
+  // --- 10. 構文不正 JSON (Malformed JSON Payload) による 500 クラッシュ攻撃耐性 ---
+  console.log('\n--- 10. 構文不正 JSON (Malformed JSON Payload) による 500 クラッシュ攻撃耐性 ---');
+  const malformedJsonRes = await request(
+    { path: '/api/cbt/activities/slot', method: 'PUT' },
+    '{"recordDateYmd": "2026-11-21", hourSlot: 10, activityName: broken_json...',
+    {
+      'Cookie': memberCookie,
+      'Host': 'localhost:3001',
+      'Origin': 'http://localhost:3001',
+    }
+  );
+  assert(
+    malformedJsonRes.status === 400,
+    '構文不正JSON防御: 不正なJSONボディ送信は 500 ではなく 400 Bad Request で安全に拒絶'
+  );
+
+  // --- 11. テンプレート汚染 & プロトタイプ汚染 (Prototype Pollution / Key Injection) 攻撃耐性 ---
+  console.log('\n--- 11. テンプレート汚染 & プロトタイプ汚染 攻撃耐性 ---');
+  const protoPollutionRes = await request(
+    { path: '/api/cbt/templates', method: 'POST' },
+    JSON.stringify({
+      name: '悪意あるテンプレート',
+      scheduleData: {
+        '__proto__': 'polluted',
+        '99999': 'invalid_hour',
+        '0': '深夜',
+      },
+    }),
+    {
+      'Cookie': memberCookie,
+      'Host': 'localhost:3001',
+      'Origin': 'http://localhost:3001',
+    }
+  );
+  assert(
+    protoPollutionRes.status === 400,
+    'プロトタイプ・キー汚染防御: scheduleData の __proto__ / 不正な時間枠キーは 400 Bad Request で遮断'
+  );
+
+  // --- 12. 存在しないテンプレート ID 適用攻撃耐性 ---
+  console.log('\n--- 12. 存在しないテンプレート ID 適用攻撃耐性 ---');
+  const notFoundTplRes = await request(
+    { path: '/api/cbt/templates/apply', method: 'POST' },
+    JSON.stringify({
+      templateId: 'non-existent-template-uuid',
+      targetDatesYmd: ['2026-11-21'],
+      overwriteNonEmpty: false,
+    }),
+    {
+      'Cookie': memberCookie,
+      'Host': 'localhost:3001',
+      'Origin': 'http://localhost:3001',
+    }
+  );
+  assert(
+    notFoundTplRes.status === 404,
+    'テンプレートID防御: 存在しない templateId は 500 クラッシュせず 404 Not Found で拒絶'
+  );
+
+  // --- 13. 長大メールアドレスによるレートリミッター・メモリ枯渇 DoS 耐性 ---
+  console.log('\n--- 13. 長大メールアドレスによるレートリミッター・メモリ枯渇 DoS 耐性 ---');
+  const hugeEmailRes = await request(
+    { path: '/api/auth/login', method: 'POST' },
+    JSON.stringify({
+      email: 'A'.repeat(5000) + '@example.com',
+      password: 'password123',
+    }),
+    {
+      'Host': 'localhost:3001',
+      'Origin': 'http://localhost:3001',
+    }
+  );
+  assert(
+    hugeEmailRes.status === 400,
+    '長大識別子DoS防御: 255文字を超えるメールアドレスは 400 Bad Request で即座に遮断'
+  );
+
+  // --- 14. 非月曜日パラメータによる週間マトリクス取得クラッシュ攻撃耐性 ---
+  console.log('\n--- 14. 非月曜日パラメータによる週間マトリクス取得クラッシュ攻撃耐性 ---');
+  const invalidMondayWeekRes = await request(
+    { path: '/api/cbt/activities/week?monday=2026-11-20', method: 'GET' }, // 金曜日
+    null,
+    {
+      'Cookie': memberCookie,
+      'Host': 'localhost:3001',
+    }
+  );
+  assert(
+    invalidMondayWeekRes.status === 400,
+    '非月曜日クエリ防御: monday に月曜日以外（金曜等）を指定したリクエストは 400 Bad Request で拒絶'
+  );
+
   console.log('\n===============================================================');
   console.log(` セキュリティ診断サマリー: ${passed} PASSED, ${failed} FAILED`);
   console.log('===============================================================');

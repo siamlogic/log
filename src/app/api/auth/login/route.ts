@@ -12,19 +12,35 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'CSRF検証に失敗しました (不正なオリジン)' }, { status: 403 });
   }
 
+  let body: any;
   try {
-    const { email, password, mfaCode } = await req.json();
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'リクエストボディが正しいJSON形式ではありません' }, { status: 400 });
+  }
+
+  try {
+    const { email, password, mfaCode } = body;
 
     if (!email || !password) {
       return NextResponse.json({ error: 'メールアドレスとパスワードを入力してください' }, { status: 400 });
+    }
+
+    if (typeof email !== 'string' || email.length > 255) {
+      return NextResponse.json({ error: 'メールアドレスの形式が不正です（最大255文字）' }, { status: 400 });
     }
 
     if (typeof password !== 'string' || password.length > 128) {
       return NextResponse.json({ error: 'パスワードの形式が不正です（最大128文字）' }, { status: 400 });
     }
 
-    const cleanEmail = String(email).trim().toLowerCase();
-    const ip = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || '127.0.0.1';
+    if (mfaCode !== undefined && mfaCode !== null && (typeof mfaCode !== 'string' || mfaCode.length > 64)) {
+      return NextResponse.json({ error: '認証コードの形式が不正です' }, { status: 400 });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const rawIp = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || '127.0.0.1';
+    const ip = rawIp.split(',')[0].trim().slice(0, 45);
 
     // 多層レートリミット: IP単位 & メールアドレス単位の二重チェック
     const ipRateCheck = checkRateLimit(`login:ip:${ip}`, 40, 60000);
@@ -36,7 +52,6 @@ export async function POST(req: Request) {
         { status: 429, headers: { 'Retry-After': Math.ceil(resetMs / 1000).toString() } }
       );
     }
-
 
     const user = await prisma.user.findUnique({
       where: { email: cleanEmail },
@@ -50,6 +65,16 @@ export async function POST(req: Request) {
       const jitterMs = 10 + Math.floor(Math.random() * 8);
       await new Promise((resolve) => setTimeout(resolve, jitterMs));
       return NextResponse.json({ error: 'メールアドレスまたはパスワードが正しくありません' }, { status: 401 });
+    }
+
+    // 利用停止アカウントのアクセス遮断
+    if (user.status === 'suspended') {
+      return NextResponse.json({ error: 'このアカウントは利用停止されています。システム管理者にお問い合わせください。' }, { status: 403 });
+    }
+
+    // 仮登録（招待中）アカウントの通常ログイン遮断
+    if (user.status === 'invited') {
+      return NextResponse.json({ error: '本登録が完了していません。招待メールのリンクからパスワードを設定してください。' }, { status: 401 });
     }
 
     // アカウントロック判定 (5回失敗で15分ロック)

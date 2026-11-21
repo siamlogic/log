@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getCurrentSessionUser } from '@/lib/auth-service';
 import { getMemberWeekActivitiesForAdmin } from '@/lib/dal/admin';
-import { getMondayOfCurrentWeek } from '@/lib/date-utils';
+import { getMondayOfCurrentWeek, isMondayYmd } from '@/lib/date-utils';
 import { logAudit } from '@/lib/audit';
 
 export const dynamic = 'force-dynamic';
@@ -15,9 +15,21 @@ export async function GET(
     return NextResponse.json({ error: '管理者権限が必要です' }, { status: 403 });
   }
 
-  const { searchParams } = new URL(req.url);
-  const mondayYmd = searchParams.get('monday') || getMondayOfCurrentWeek();
   const targetMemberId = params.id;
+  if (!targetMemberId || typeof targetMemberId !== 'string' || targetMemberId.length > 64) {
+    return NextResponse.json({ error: 'メンバーIDの指定が不正です' }, { status: 400 });
+  }
+
+  const { searchParams } = new URL(req.url);
+  const mondayParam = searchParams.get('monday');
+  if (mondayParam && !isMondayYmd(mondayParam)) {
+    return NextResponse.json(
+      { error: '週間表示の基準日は必ず月曜日（YYYY-MM-DD）を指定してください。' },
+      { status: 400 }
+    );
+  }
+
+  const mondayYmd = mondayParam || getMondayOfCurrentWeek();
 
   try {
     const data = await getMemberWeekActivitiesForAdmin(user.id, targetMemberId, mondayYmd);
