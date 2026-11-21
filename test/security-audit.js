@@ -321,9 +321,21 @@ async function runSecurityAudit() {
     '利用停止アカウント遮断: status: suspended アカウントは 403 Forbidden でログイン拒絶'
   );
 
+  // 未ロックの新規招待アカウントで検証 (テスト3のアカウントはロック済みのため分離)
+  const freshInvitedEmail = `audit_invited_${Date.now()}@example.com`;
+  await request(
+    { path: '/api/admin/members/invite', method: 'POST' },
+    JSON.stringify({ email: freshInvitedEmail, displayName: 'Fresh Invited' }),
+    {
+      'Cookie': adminCookie,
+      'Host': 'localhost:3001',
+      'Origin': 'http://localhost:3001',
+    }
+  );
+
   const invitedLoginRes = await request(
     { path: '/api/auth/login', method: 'POST' },
-    JSON.stringify({ email: targetEmail, password: 'password123' }),
+    JSON.stringify({ email: freshInvitedEmail, password: 'password123' }),
     {
       'Host': 'localhost:3001',
       'Origin': 'http://localhost:3001',
