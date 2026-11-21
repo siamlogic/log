@@ -400,18 +400,16 @@ IDOR（水平権限昇格）を構造的に防止するため、**メンバー�
   "notes": "日差しが暖かく気分がすっきりした"
 }
 ```
-- **レスポンス (200 OK)**（※クライアントが設定に基づいて算出した `moodScore`, `moodRawLevel`, `moodDisplaySymbol` を検証・アトミック保存）:
+- **レスポンス (200 OK)**（※クライアントが設定に基づいて算出した `moodScore`, `moodRawLevel`, `moodDisplaySymbol` を検証・アトミック保存し `ActivitySlotDTO` を返却）:
 ```json
 {
   "id": "a5d89f82-3d84-4bf8-bf4a-d68a2bc1e091",
-  "recordDate": "2026-10-15T00:00:00.000Z",
   "hourSlot": 14,
   "activityName": "散歩とカフェ",
   "moodRawLevel": 3,
   "moodScore": 0.75,
   "moodDisplaySymbol": "🌤️",
-  "notes": "日差しが暖かく気分がすっきりした",
-  "updatedAt": "2026-10-15T05:05:00.000Z"
+  "notes": "日差しが暖かく気分がすっきりした"
 }
 ```
 

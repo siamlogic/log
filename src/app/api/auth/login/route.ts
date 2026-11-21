@@ -67,11 +67,23 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'メールアドレスまたはパスワードが正しくありません' }, { status: 401 });
     }
 
+    // アカウントロック状態の確認
+    const isCurrentlyLocked = Boolean(user.lockedUntil && user.lockedUntil > new Date());
+
     // パスワード突合 (Argon2id 検証 & 旧ハッシュ後方互換)
     // ユーザー列挙対策: 停止・招待・ロック判定より前にパスワードを検証し、タイミングおよび情報漏洩を遮断
     const isPasswordValid = await verifyPassword(password, user.passwordHash);
+
+    // ロック期間中の場合は、パスワード合致の有無によらず失敗回数やロック期限を変更せず423応答
+    if (isCurrentlyLocked) {
+      return NextResponse.json({
+        error: 'アカウントがロックされています。15分後に再度お試しください。',
+        locked: true,
+      }, { status: 423 });
+    }
+
     if (!isPasswordValid) {
-      // 原子的インクリメントによる競合安全な失敗回数カウント
+      // 未ロック状態での原子的インクリメントによる競合安全な失敗回数カウント
       const updatedUser = await prisma.user.update({
         where: { id: user.id },
         data: { failedLoginAttempts: { increment: 1 } },
@@ -97,14 +109,6 @@ export async function POST(req: Request) {
         error: willLock ? 'ログイン試行回数が超過したため15分間ロックされました' : 'メールアドレスまたはパスワードが正しくありません',
         locked: willLock,
       }, { status: 401 });
-    }
-
-    // アカウントロック判定 (5回失敗で15分ロック)
-    if (user.lockedUntil && user.lockedUntil > new Date()) {
-      return NextResponse.json({
-        error: 'アカウントがロックされています。15分後に再度お試しください。',
-        locked: true,
-      }, { status: 423 });
     }
 
     // 利用停止アカウントのアクセス遮断

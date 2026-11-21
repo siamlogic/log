@@ -104,7 +104,6 @@ export function DayTimeline({
               <button
                 type="button"
                 key={hour}
-                aria-label={`${hour}時の記録: ${hasActivity ? slot?.activityName : '未入力'}`}
                 onClick={() => onSlotClick(currentDay.dateStr, currentDay.key, hour)}
                 className={`w-full text-left min-h-[52px] p-2.5 rounded-xl border transition flex items-center justify-between cursor-pointer active:scale-[0.99] focus:outline-none focus:ring-2 focus:ring-teal-500 ${
                   hasActivity

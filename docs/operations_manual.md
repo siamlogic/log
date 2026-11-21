@@ -25,7 +25,7 @@ journalctl -u cbt-app -n 100 -f
 ### 1.2 サービスヘルスチェック
 外部監視ツールまたは監視スクリプトより、以下のエンドポイントを定期的に疎通確認します。
 - **URL**: `http://localhost:3001/api/auth/me`（または `https://<FQDN>/api/auth/me`）
-- **期待レスポンス**: 未認証時 HTTP 401 (セッション認証必須APIのため、401応答によりサーバーおよびNext.jsプロセスの正常稼働・Readinessを確認)
+- **期待レスポンス**: 未認証時 HTTP 401 (セッション認証必須APIのため、401応答によりHTTPサーバーおよびNext.jsプロセスの正常稼働・プロセス疎通を確認。※DB接続を含めた完全なReadiness確認を行う場合は、DBクエリを伴う認証配下の疎通を併用)
 
 ---
 
@@ -42,36 +42,51 @@ mkdir -p backups
 BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
 sqlite3 prisma/dev.db "VACUUM INTO 'backups/cbt_backup_${BACKUP_DATE}.db'"
 
-# 3. バックアップファイルの暗号化保管 (パスフレーズによるAES-256暗号化)
-gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase-file /etc/cbt/backup_passphrase.key backups/cbt_backup_${BACKUP_DATE}.db
-
-# 4. 暗号化成功時に平文DBスナップショットを安全消去
-if [ -f "backups/cbt_backup_${BACKUP_DATE}.db.gpg" ]; then
-  rm -f backups/cbt_backup_${BACKUP_DATE}.db
+# 3. バックアップファイルの暗号化保管と平文削除 (gpgの終了ステータスで成否判定)
+if gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase-file /etc/cbt/backup_passphrase.key -o "backups/cbt_backup_${BACKUP_DATE}.db.gpg" "backups/cbt_backup_${BACKUP_DATE}.db"; then
+  # 暗号化成功時のみ平文スナップショットを安全消去
+  rm -f "backups/cbt_backup_${BACKUP_DATE}.db"
+  echo "バックアップ暗号化完了: backups/cbt_backup_${BACKUP_DATE}.db.gpg"
+else
+  echo "GPG暗号化に失敗しました。平文スナップショットを保持して異常終了します。" >&2
+  exit 1
 fi
 ```
 
 ### 2.2 リストア（復旧）手順
 ```bash
-# 1. サービスの安全な停止 (書き込み停止)
-pm2 stop cbt-app
+# 1. サービスの安全な停止 (書き込み停止を確認)
+pm2 stop cbt-app || { echo "サービス停止に失敗したため中断します"; exit 1; }
 
-# 2. 暗号化バックアップの復号
-gpg --batch --yes --decrypt --passphrase-file /etc/cbt/backup_passphrase.key -o backups/restore_temp.db backups/cbt_backup_<DATE>.db.gpg
+# 2. 実行ごとに分離した一時作業ディレクトリで復号
+RESTORE_WORK_DIR=$(mktemp -d /tmp/cbt_restore_XXXXXX)
+if ! gpg --batch --yes --decrypt --passphrase-file /etc/cbt/backup_passphrase.key -o "${RESTORE_WORK_DIR}/restore.db" backups/cbt_backup_<DATE>.db.gpg; then
+  echo "復号に失敗しました。既存DBは変更せず終了します。" >&2
+  rm -rf "${RESTORE_WORK_DIR}"
+  exit 1
+fi
 
-# 3. 既存DBファイル群の退避 (古いWAL/SHMが残ると復旧データが破損するため一括退避)
-mkdir -p prisma/old_db_backup
-mv prisma/dev.db prisma/old_db_backup/dev.db.$(date +%Y%m%d_%H%M%S) 2>/dev/null || true
-mv prisma/dev.db-wal prisma/old_db_backup/dev.db-wal.$(date +%Y%m%d_%H%M%S) 2>/dev/null || true
-mv prisma/dev.db-shm prisma/old_db_backup/dev.db-shm.$(date +%Y%m%d_%H%M%S) 2>/dev/null || true
+# 3. 復号したDBの整合性検査 (Integrity Check) を事前検証
+INTEGRITY=$(sqlite3 "${RESTORE_WORK_DIR}/restore.db" "PRAGMA integrity_check;")
+if [ "$INTEGRITY" != "ok" ]; then
+  echo "復元DBの整合性検査に失敗しました ($INTEGRITY)。既存DBは保護され変更されません。" >&2
+  rm -rf "${RESTORE_WORK_DIR}"
+  exit 1
+fi
 
-# 4. 復号したDBファイルの配置
-cp backups/restore_temp.db prisma/dev.db
-rm -f backups/restore_temp.db
+# 4. 事前検証成功後、既存DBファイル群を一括安全退避
+OLD_BACKUP_DIR="prisma/old_db_backup/$(date +%Y%m%d_%H%M%S)"
+mkdir -p "${OLD_BACKUP_DIR}"
+mv prisma/dev.db "${OLD_BACKUP_DIR}/dev.db" 2>/dev/null || true
+mv prisma/dev.db-wal "${OLD_BACKUP_DIR}/dev.db-wal" 2>/dev/null || true
+mv prisma/dev.db-shm "${OLD_BACKUP_DIR}/dev.db-shm" 2>/dev/null || true
 
-# 5. DBの整合性検査 (Integrity Check)
-sqlite3 prisma/dev.db "PRAGMA integrity_check;"
-# 出力が "ok" であることを確認
+# 5. 検証済みDBファイルの配置
+if ! cp "${RESTORE_WORK_DIR}/restore.db" prisma/dev.db; then
+  echo "DB配置に失敗しました。一時ファイル ${RESTORE_WORK_DIR} を残してサービス再起動を停止します。" >&2
+  exit 1
+fi
+rm -rf "${RESTORE_WORK_DIR}"
 
 # 6. サービスの再起動
 pm2 start cbt-app

@@ -366,8 +366,9 @@ paths:
               schema:
                 type: object
                 properties:
-                  appliedDatesCount:
+                  appliedCount:
                     type: integer
+                    description: 反映された活動スロット（時間枠）の総数
 
   /cbt/mood-config:
     get:

@@ -73,4 +73,4 @@ PORT=3001 npm run start
 - ヘルスチェックエンドポイント: `GET /api/auth/me`
 - レスポンス仕様:
   - 認証済みセッション: HTTP 200 (`{ user: { id, email, role, ... } }`)
-  - 未認証時: HTTP 401 (`{ error: '認証が必要です' }`) ※サーバー稼働・API応答の確認用 (readiness check)
+  - 未認証時: HTTP 401 (`{ error: '認証が必要です' }`) ※HTTPサーバーおよびNext.jsプロセスの正常稼働・プロセス疎通確認用（※DB接続を含む完全なReadiness確認はDBクエリを伴う認証エンドポイントで実施）
