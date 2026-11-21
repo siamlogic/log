@@ -82,6 +82,13 @@ export async function POST(req: Request) {
       }, { status: 423 });
     }
 
+    // 仮登録（招待中・未本登録）アカウントの通常ログイン遮断
+    // 招待中ユーザーは初期パスワードが未設定のため、ダミー突合でタイミングを均衡させた上で招待リンクへ誘導
+    if (user.status === 'invited') {
+      await verifyPassword(password, DUMMY_PASSWORD_HASH);
+      return NextResponse.json({ error: '本登録が完了していません。招待メールのリンクからパスワードを設定してください。' }, { status: 401 });
+    }
+
     if (!isPasswordValid) {
       // 未ロック状態での原子的インクリメントによる競合安全な失敗回数カウント
       const updatedUser = await prisma.user.update({
@@ -114,11 +121,6 @@ export async function POST(req: Request) {
     // 利用停止アカウントのアクセス遮断
     if (user.status === 'suspended') {
       return NextResponse.json({ error: 'このアカウントは利用停止されています。システム管理者にお問い合わせください。' }, { status: 403 });
-    }
-
-    // 仮登録（招待中）アカウントの通常ログイン遮断
-    if (user.status === 'invited') {
-      return NextResponse.json({ error: '本登録が完了していません。招待メールのリンクからパスワードを設定してください。' }, { status: 401 });
     }
 
     // 旧レガシーハッシュだった場合は安全に最新セキュアハッシュへ自動移行

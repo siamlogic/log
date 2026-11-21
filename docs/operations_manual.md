@@ -74,19 +74,42 @@ if [ "$INTEGRITY" != "ok" ]; then
   exit 1
 fi
 
-# 4. 事前検証成功後、既存DBファイル群を一括安全退避
+# 4. 事前検証成功後、既存DBファイル群を一括安全退避 (途中失敗時はDBとWALを一組として安全ロールバック)
 OLD_BACKUP_DIR="prisma/old_db_backup/$(date +%Y%m%d_%H%M%S)"
 mkdir -p "${OLD_BACKUP_DIR}" || { echo "退避先ディレクトリの作成に失敗したため復元を中断します。" >&2; rm -rf "${RESTORE_WORK_DIR}"; exit 1; }
 
+MOVED_FILES=()
+MOVE_FAILED=false
+
 for f in prisma/dev.db prisma/dev.db-wal prisma/dev.db-shm; do
   if [ -f "$f" ]; then
-    mv "$f" "${OLD_BACKUP_DIR}/$(basename "$f")" || {
-      echo "既存ファイル ${f} の退避に失敗したため復元を中断します。" >&2
-      rm -rf "${RESTORE_WORK_DIR}"
-      exit 1
-    }
+    fname=$(basename "$f")
+    if mv "$f" "${OLD_BACKUP_DIR}/${fname}"; then
+      MOVED_FILES+=("${fname}")
+    else
+      echo "既存ファイル ${f} の退避に失敗しました。" >&2
+      MOVE_FAILED=true
+      break
+    fi
   fi
 done
+
+if [ "$MOVE_FAILED" = true ]; then
+  echo "既存DBファイル群の一部退避に失敗したため、DBとWALの分離を防ぐためロールバックを実行します..." >&2
+  ROLLBACK_FAILED=false
+  for fname in "${MOVED_FILES[@]}"; do
+    if ! mv "${OLD_BACKUP_DIR}/${fname}" "prisma/${fname}"; then
+      ROLLBACK_FAILED=true
+    fi
+  done
+  if [ "$ROLLBACK_FAILED" = true ]; then
+    echo "【重要障害】退避ロールバックに失敗しました。DBとWALが不整合な状態で分離している恐れがあるため、prisma/ と ${OLD_BACKUP_DIR} の両ファイルをそのまま保全し、サービスを再起動せず停止を維持してください。" >&2
+  else
+    echo "既存DBファイル群を一組として安全にロールバックしました。復元を中断します。" >&2
+  fi
+  rm -rf "${RESTORE_WORK_DIR}"
+  exit 1
+fi
 
 # 5. 検証済みDBファイルの配置
 if ! cp "${RESTORE_WORK_DIR}/restore.db" prisma/dev.db; then

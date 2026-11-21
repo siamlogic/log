@@ -179,6 +179,33 @@ async function runSecurityAudit() {
   }
   assert(lockOccurred, 'ブルートフォース防御: 不正トークン5回試行で 423 Locked に遷移しアカウントを保護');
 
+  // 招待中（仮登録）アカウントのログイン遮断検証 (招待連打試験より前に実行し、201と401を検証)
+  const invitedUserEmail = `audit_invited_check_${Date.now()}@example.com`;
+  const inviteCheckRes = await request(
+    { path: '/api/admin/members/invite', method: 'POST' },
+    JSON.stringify({ email: invitedUserEmail, displayName: 'Invited Check User' }),
+    {
+      'Cookie': adminCookie,
+      'Host': 'localhost:3001',
+      'Origin': 'http://localhost:3001',
+    }
+  );
+  assert(inviteCheckRes.status === 201, '仮登録アカウント招待発行成功 (201 Created)');
+
+  const invitedLoginRes = await request(
+    { path: '/api/auth/login', method: 'POST' },
+    JSON.stringify({ email: invitedUserEmail, password: 'AnyPassword123!' }),
+    {
+      'Host': 'localhost:3001',
+      'Origin': 'http://localhost:3001',
+    }
+  );
+  assert(
+    invitedLoginRes.status === 401 && (invitedLoginRes.json?.error?.includes('本登録が完了していません') ?? false),
+    '仮登録アカウント遮断: status: invited アカウントは通常ログイン不可 (401 & 招待リンク案内)',
+    invitedLoginRes.json?.error
+  );
+
   // --- 4. 管理者招待 API レート制限 (DoS / 大量招待) 攻撃シミュレーション ---
   console.log('\n--- 4. 管理者招待 API レート制限 & DoS 耐性 ---');
   // 招待 API へ25回連続で高速リクエスト送信 (上限は20回/分)
@@ -306,8 +333,8 @@ async function runSecurityAudit() {
     '長大メモDoS防御: 2000文字を超える長大メモは 400 Bad Request で即座に遮断'
   );
 
-  // --- 8. 停止アカウント & 仮登録アカウントのログイン遮断 ---
-  console.log('\n--- 8. 停止アカウント & 仮登録アカウントのログイン遮断 ---');
+  // --- 8. 停止アカウントのログイン遮断 ---
+  console.log('\n--- 8. 停止アカウントのログイン遮断 ---');
   const suspendedLoginRes = await request(
     { path: '/api/auth/login', method: 'POST' },
     JSON.stringify({ email: 'suspended@example.com', password: 'password123' }),
@@ -319,31 +346,6 @@ async function runSecurityAudit() {
   assert(
     suspendedLoginRes.status === 403,
     '利用停止アカウント遮断: status: suspended アカウントは 403 Forbidden でログイン拒絶'
-  );
-
-  // 未ロックの新規招待アカウントで検証 (テスト3のアカウントはロック済みのため分離)
-  const freshInvitedEmail = `audit_invited_${Date.now()}@example.com`;
-  await request(
-    { path: '/api/admin/members/invite', method: 'POST' },
-    JSON.stringify({ email: freshInvitedEmail, displayName: 'Fresh Invited' }),
-    {
-      'Cookie': adminCookie,
-      'Host': 'localhost:3001',
-      'Origin': 'http://localhost:3001',
-    }
-  );
-
-  const invitedLoginRes = await request(
-    { path: '/api/auth/login', method: 'POST' },
-    JSON.stringify({ email: freshInvitedEmail, password: 'password123' }),
-    {
-      'Host': 'localhost:3001',
-      'Origin': 'http://localhost:3001',
-    }
-  );
-  assert(
-    invitedLoginRes.status === 401,
-    '仮登録アカウント遮断: status: invited アカウントは通常ログイン不可 (401 & 招待リンク案内)'
   );
 
   // --- 9. 不正・非実在日付 (2月31日等) による 500 クラッシュ攻撃耐性 ---
