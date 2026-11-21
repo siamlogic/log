@@ -12,7 +12,7 @@
 本システムは、医療機関や臨床相談窓口での利用、あるいはセキュアな閉域ネットワーク運用を想定し、**単一サーバー、単一インスタンス（Single Server / Single Instance）での運用を大前提**とします。複雑な分散クラスタ・外部キャッシュ基盤（Redis等）を排除し、**Dockerなどのコンテナ基盤に一切依存しない軽量かつ堅牢なネイティブ実行構成**を採用します。
 
 ### パターンA: 閉域オンホスト / オンプレミス（推奨・ゼロ依存構成）
-- **実行基盤**: **Docker完全非使用**。Node.js (v24+) ネイティブ環境で直接起動（PM2 または systemd によるプロセスデーモン管理）。
+- **実行基盤**: **Docker完全非使用**。Node.js (v20+ / v24+) ネイティブ環境で直接起動（PM2 または systemd によるプロセスデーモン管理）。
 - **データベース**: SQLite 3（ローカルファイルDB、WALモード運用）。コンテナや外部DBサーバーのセットアップ不要でゼロ依存稼働。
 - **暗号化**: OSレベルのBitLocker / LUKS によるストレージ暗号化（At-Rest）および TLS 1.3 リバースプロキシ（Nginx / Caddy）。
 - **ネットワーク**: 院内LAN / 閉域VPN（Tailscale, WireGuard 等）経由でのアクセスに限定し、インターネットからの直接アクセスを遮断。
@@ -45,15 +45,15 @@ flowchart TD
 | `NODE_ENV` | ◯ | `production` | 実行環境モード |
 | `PORT` | ◯ | `3001` | リッスンポート番号 |
 | `DATABASE_URL` | ◯ | `file:./dev.db` | SQLite 接続文字列 (PostgreSQL時は接続URI) |
-| `NEXTAUTH_SECRET` | ◯ | (64文字以上の乱数Base64) | セッションCookie署名鍵 (本番必須) |
-| `MASTER_MFA_ENCRYPTION_KEY` | ◯ | (32バイトのHex文字列) | TOTP秘密鍵の AES-256-GCM 暗号化マスターキー |
+| `NEXTAUTH_SECRET` | ◯ | (32文字以上の乱数Base64/Hex) | セッションCookie署名鍵 (本番必須) |
+| `MFA_ENCRYPTION_KEY` | ◯ | (64文字のHex文字列 / 32バイト) | TOTP秘密鍵の AES-256-GCM 暗号化マスターキー |
 
 ---
 
 ## 4. デプロイメント手順 (ネイティブ直接起動)
 
 ```bash
-# 1. 依存関係のインストール (Node.js v24+ 環境)
+# 1. 依存関係のインストール (Node.js v20+ / v24+ 環境)
 npm ci
 
 # 2. データベースのセットアップ (SQLite / WALモード)
@@ -64,10 +64,13 @@ node prisma/seed.js
 npm run build
 
 # 4. サーバー起動 (systemd または PM2、または直接起動)
-$env:PORT=3001; npm run start
+PORT=3001 npm run start
+# Windows環境の例: $env:PORT="3001"; npm run start
 # Linux/PM2環境の例: pm2 start npm --name "cbt-app" -- start
 ```
 
 ### 4.1 ヘルスチェック
 - ヘルスチェックエンドポイント: `GET /api/auth/me`
-- レスポンス: HTTP 200 (セッションなし時は `{ user: null }`)
+- レスポンス仕様:
+  - 認証済みセッション: HTTP 200 (`{ user: { id, email, role, ... } }`)
+  - 未認証時: HTTP 401 (`{ error: '認証が必要です' }`) ※サーバー稼働・API応答の確認用 (readiness check)

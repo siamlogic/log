@@ -44,6 +44,11 @@
 # 依存パッケージのインストール
 npm install
 
+# 環境変数の設定 (.env.example をコピーして作成)
+cp .env.example .env
+# ※開発・ローカル検証時は初期値のまま動作します。
+# ※本番環境では NEXTAUTH_SECRET (32文字以上乱数) と MFA_ENCRYPTION_KEY (64文字Hex) を必ず独自設定してください。
+
 # データベースマイグレーション & クライアント生成
 npm run db:push
 npm run db:generate

@@ -180,13 +180,13 @@ export async function copyDayActivities(
 
   if (sourceSlots.length === 0) return { copiedCount: 0 };
 
-  const existingTargetSlots = await prisma.cbtActivity.findMany({
-    where: { userId: sessionUserId, recordDate: targetUtc },
-  });
-  const existingMap = new Set(existingTargetSlots.map((s) => s.hourSlot));
-
   let copied = 0;
   await prisma.$transaction(async (tx) => {
+    const existingTargetSlots = await tx.cbtActivity.findMany({
+      where: { userId: sessionUserId, recordDate: targetUtc },
+    });
+    const existingMap = new Set(existingTargetSlots.map((s) => s.hourSlot));
+
     for (const slot of sourceSlots) {
       const exists = existingMap.has(slot.hourSlot);
       if (exists && !params.overwriteNonEmpty) continue;
@@ -253,19 +253,19 @@ export async function copyWeekActivities(
 
   if (sourceSlots.length === 0) return { copiedCount: 0 };
 
-  const existingTargetSlots = await prisma.cbtActivity.findMany({
-    where: {
-      userId: sessionUserId,
-      recordDate: { gte: startTargetUtc, lte: endTargetUtc },
-    },
-  });
-
-  const existingMap = new Set(
-    existingTargetSlots.map((s) => `${formatUtcDateToYmd(s.recordDate)}_${s.hourSlot}`)
-  );
-
   let totalCopied = 0;
   await prisma.$transaction(async (tx) => {
+    const existingTargetSlots = await tx.cbtActivity.findMany({
+      where: {
+        userId: sessionUserId,
+        recordDate: { gte: startTargetUtc, lte: endTargetUtc },
+      },
+    });
+
+    const existingMap = new Set(
+      existingTargetSlots.map((s) => `${formatUtcDateToYmd(s.recordDate)}_${s.hourSlot}`)
+    );
+
     for (let i = 0; i < 7; i++) {
       const srcDateStr = sourceDays[i].dateStr;
       const tgtDateStr = targetDays[i].dateStr;
@@ -528,34 +528,39 @@ export async function applyActivityRange(
 
   const affectedDateUtcs = Array.from(affectedDatesSet).map((ymd) => parseYmdToUtcDate(ymd));
 
-  // 既存スロットを一括取得して保護判定 (キー -> 既存の活動名)
-  const existingSlots = await prisma.cbtActivity.findMany({
-    where: {
-      userId: sessionUserId,
-      recordDate: { in: affectedDateUtcs },
-    },
-  });
-
-  const existingMap = new Map<string, string>();
-  for (const s of existingSlots) {
-    existingMap.set(`${formatUtcDateToYmd(s.recordDate)}_${s.hourSlot}`, s.activityName);
-  }
-
-  // 開始スロットの既存の活動名を取得
-  const firstSlotKey = `${targetSlots[0]?.targetYmd}_${targetSlots[0]?.targetHour}`;
-  const firstExistingActivity = existingMap.get(firstSlotKey) ?? '';
-  const originalActivity = (params.originalActivityName ?? firstExistingActivity).trim();
+  // 明示的に指定された場合のみ元の活動名として採用 (未指定時は推定せず、新規一括入力として既存枠をすべて保護)
+  const originalActivity = params.originalActivityName ? params.originalActivityName.trim() : '';
 
   let totalApplied = 0;
 
   await prisma.$transaction(async (tx) => {
+    // 既存スロットを一括取得して保護判定 (キー -> 既存の活動名)
+    const existingSlots = await tx.cbtActivity.findMany({
+      where: {
+        userId: sessionUserId,
+        recordDate: { in: affectedDateUtcs },
+      },
+    });
+
+    const existingMap = new Map<string, string>();
+    for (const s of existingSlots) {
+      existingMap.set(`${formatUtcDateToYmd(s.recordDate)}_${s.hourSlot}`, s.activityName);
+    }
+
+    // 連続ブロック追跡: 先頭から同名活動が連続している間のみ同一ブロックと判定
+    let inContinuousBlock = true;
+
     for (const item of targetSlots) {
       const key = `${item.targetYmd}_${item.targetHour}`;
       const existingAct = existingMap.get(key);
       const exists = existingAct !== undefined;
 
-      // 同一活動ブロックの判定: 元の活動名と一致していれば同一ブロックの更新とみなす
-      const isSameBlock = originalActivity !== '' && exists && existingAct.trim() === originalActivity;
+      const matchesOriginal = originalActivity !== '' && exists && existingAct.trim() === originalActivity;
+      if (!matchesOriginal) {
+        inContinuousBlock = false;
+      }
+      // 同一活動ブロックの判定: 元の活動名と一致し、かつ先頭から連続している枠のみ同一ブロックとみなす
+      const isSameBlock = inContinuousBlock && matchesOriginal;
 
       // 保護判定: 既存枠が存在し、上書き不許可で、同一ブロックでもない枠はスキップ
       const shouldProtect = exists && !params.overwriteNonEmpty && !isSameBlock;

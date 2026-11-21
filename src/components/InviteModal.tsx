@@ -59,15 +59,26 @@ export function InviteModal({ onClose, onMemberInvited }: InviteModalProps) {
     }
   };
 
-  const handleCopyLink = () => {
+  const [copyError, setCopyError] = useState('');
+
+  const handleCopyLink = async () => {
     if (!inviteResult) return;
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
     const setupUrl = `${origin}/?mode=setup&token=${inviteResult.inviteToken}&email=${encodeURIComponent(
       inviteResult.member.email
     )}`;
-    navigator.clipboard.writeText(setupUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 3000);
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(setupUrl);
+        setCopied(true);
+        setCopyError('');
+        setTimeout(() => setCopied(false), 3000);
+      } else {
+        throw new Error('Clipboard API not supported');
+      }
+    } catch {
+      setCopyError('自動コピーに失敗しました。下のリンク枠から手動でコピーしてください。');
+    }
   };
 
   return (
@@ -96,8 +107,9 @@ export function InviteModal({ onClose, onMemberInvited }: InviteModalProps) {
             )}
 
             <div>
-              <label className="block font-bold text-slate-700 mb-1">メンバー氏名（表示名）</label>
+              <label htmlFor="invite-display-name" className="block font-bold text-slate-700 mb-1">メンバー氏名（表示名）</label>
               <input
+                id="invite-display-name"
                 type="text"
                 required
                 value={displayName}
@@ -108,8 +120,9 @@ export function InviteModal({ onClose, onMemberInvited }: InviteModalProps) {
             </div>
 
             <div>
-              <label className="block font-bold text-slate-700 mb-1">メールアドレス</label>
+              <label htmlFor="invite-email" className="block font-bold text-slate-700 mb-1">メールアドレス</label>
               <input
+                id="invite-email"
                 type="email"
                 required
                 value={email}
@@ -120,8 +133,9 @@ export function InviteModal({ onClose, onMemberInvited }: InviteModalProps) {
             </div>
 
             <div>
-              <label className="block font-bold text-slate-700 mb-1">支援ステータス</label>
+              <label htmlFor="invite-support-status" className="block font-bold text-slate-700 mb-1">支援ステータス</label>
               <select
+                id="invite-support-status"
                 value={supportStatus}
                 onChange={(e) => setSupportStatus(e.target.value as 'active' | 'paused')}
                 className="w-full p-2.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none bg-white"
@@ -172,6 +186,9 @@ export function InviteModal({ onClose, onMemberInvited }: InviteModalProps) {
                 {typeof window !== 'undefined' ? window.location.origin : ''}/?mode=setup&token=
                 {inviteResult.inviteToken}&email={encodeURIComponent(inviteResult.member.email)}
               </div>
+              {copyError && (
+                <p className="mt-1.5 text-xs text-rose-600 font-medium">{copyError}</p>
+              )}
             </div>
 
             <div className="flex items-center space-x-2">

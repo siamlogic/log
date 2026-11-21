@@ -43,6 +43,7 @@ export function DayTimeline({
         {/* 日付ナビゲーションバー */}
         <div className="p-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
           <button
+            aria-label="前日へ"
             onClick={() => onDayIndexChange(Math.max(0, selectedDayIndex - 1))}
             disabled={selectedDayIndex === 0}
             className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 font-bold disabled:opacity-30"
@@ -58,6 +59,7 @@ export function DayTimeline({
             </div>
           </div>
           <button
+            aria-label="翌日へ"
             onClick={() => onDayIndexChange(Math.min(6, selectedDayIndex + 1))}
             disabled={selectedDayIndex === 6}
             className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 font-bold disabled:opacity-30"
@@ -99,10 +101,12 @@ export function DayTimeline({
             const score = slot?.moodScore ?? null;
 
             return (
-              <div
+              <button
+                type="button"
                 key={hour}
+                aria-label={`${hour}時の記録: ${hasActivity ? slot?.activityName : '未入力'}`}
                 onClick={() => onSlotClick(currentDay.dateStr, currentDay.key, hour)}
-                className={`min-h-[52px] p-2.5 rounded-xl border transition flex items-center justify-between cursor-pointer active:scale-[0.99] ${
+                className={`w-full text-left min-h-[52px] p-2.5 rounded-xl border transition flex items-center justify-between cursor-pointer active:scale-[0.99] focus:outline-none focus:ring-2 focus:ring-teal-500 ${
                   hasActivity
                     ? 'bg-teal-50/40 border-teal-200'
                     : 'bg-slate-50/50 border-dashed border-slate-200 hover:bg-slate-100/60'
@@ -137,7 +141,7 @@ export function DayTimeline({
                     )}
                   </div>
                 )}
-              </div>
+              </button>
             );
           })}
         </div>

@@ -64,6 +64,7 @@ paths:
       summary: 現在の認証ユーザーセッション取得
       responses:
         '200':
+          description: 認証ユーザーセッション情報取得成功
           content:
             application/json:
               schema:
@@ -173,20 +174,33 @@ paths:
 
     delete:
       summary: 1時間スロットの記録消去 (クリア)
-      parameters:
-        - name: date
-          in: query
-          required: true
-          schema:
-            type: string
-        - name: hour
-          in: query
-          required: true
-          schema:
-            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [recordDateYmd, hourSlot]
+              properties:
+                recordDateYmd:
+                  type: string
+                  format: date
+                  example: "2026-10-15"
+                hourSlot:
+                  type: integer
+                  minimum: 0
+                  maximum: 23
+                  example: 14
       responses:
         '200':
           description: 消去完了
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
 
   /cbt/activities/range:
     post:
@@ -260,7 +274,7 @@ paths:
                   type: string
                 targetDateYmd:
                   type: string
-                overwrite:
+                overwriteNonEmpty:
                   type: boolean
                   default: false
                 includeMood:
@@ -269,6 +283,13 @@ paths:
       responses:
         '200':
           description: コピー完了
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  copiedCount:
+                    type: integer
 
   /cbt/copy/week:
     post:
@@ -285,7 +306,7 @@ paths:
                   type: string
                 targetMondayYmd:
                   type: string
-                overwrite:
+                overwriteNonEmpty:
                   type: boolean
                   default: false
                 includeMood:
@@ -294,12 +315,20 @@ paths:
       responses:
         '200':
           description: 一括コピー完了
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  copiedCount:
+                    type: integer
 
   /cbt/templates:
     get:
       summary: 定型ルーティン・テンプレート一覧取得
       responses:
         '200':
+          description: テンプレート一覧取得成功
           content:
             application/json:
               schema:
@@ -316,18 +345,29 @@ paths:
           application/json:
             schema:
               type: object
-              required: [templateId, targetDateYmd]
+              required: [templateId, targetDatesYmd]
               properties:
                 templateId:
                   type: string
-                targetDateYmd:
-                  type: string
-                overwrite:
+                targetDatesYmd:
+                  type: array
+                  items:
+                    type: string
+                    format: date
+                  maxItems: 31
+                overwriteNonEmpty:
                   type: boolean
                   default: false
       responses:
         '200':
           description: 反映完了
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  appliedDatesCount:
+                    type: integer
 
   /cbt/mood-config:
     get:
@@ -391,7 +431,7 @@ paths:
                   type: string
                 supportStatus:
                   type: string
-                  enum: [active, paused, completed]
+                  enum: [active, paused]
                   default: active
       responses:
         '201':
@@ -401,17 +441,19 @@ paths:
               schema:
                 type: object
                 properties:
-                  success:
-                    type: boolean
-                  memberId:
-                    type: string
+                  member:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      email:
+                        type: string
+                      displayName:
+                        type: string
+                      supportStatus:
+                        type: string
                   inviteToken:
                     type: string
-                  setupUrl:
-                    type: string
-                  expiresAt:
-                    type: string
-                    format: date-time
         '400':
           description: 入力バリデーションエラー
         '403':
@@ -435,10 +477,16 @@ paths:
             type: string
       responses:
         '200':
+          description: 担当メンバーの週間活動記録取得成功
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WeekActivitiesDTO'
+                type: object
+                properties:
+                  member:
+                    $ref: '#/components/schemas/AdminMemberDTO'
+                  weekData:
+                    $ref: '#/components/schemas/WeekActivitiesDTO'
         '403':
           description: 担当外メンバーへのアクセス拒否
 
@@ -533,7 +581,7 @@ components:
     WeekActivitiesDTO:
       type: object
       properties:
-        monday:
+        mondayDateStr:
           type: string
         days:
           type: object
@@ -544,12 +592,17 @@ components:
       properties:
         id:
           type: string
-        title:
+        name:
           type: string
-        category:
+        isPreset:
+          type: boolean
+        templateType:
           type: string
-        scheduleData:
-          type: array
+        slots:
+          type: object
+          additionalProperties:
+            type: string
+          description: 時間枠 (0-23) をキー、活動名を値とするマップ
 
     MoodConfigDTO:
       type: object
@@ -558,7 +611,7 @@ components:
           type: string
         styleType:
           type: string
-          enum: [weather, face, powerpro, arrow, number]
+          enum: [weather, face, pawapuro, arrow, number]
         scaleSteps:
           type: integer
           minimum: 3

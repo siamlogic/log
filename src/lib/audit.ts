@@ -1,9 +1,29 @@
 import { prisma } from './prisma';
 
+export type AuditAction =
+  | 'LOGIN'
+  | 'LOGIN_FAILED'
+  | 'ACCOUNT_LOCKED'
+  | 'MFA_FAILED'
+  | 'LOGOUT'
+  | 'VIEW_MEMBER'
+  | 'UPDATE_MEMO'
+  | 'UPDATE_VISIBILITY'
+  | 'UPDATE_SLOT'
+  | 'DELETE_SLOT'
+  | 'COPY_DAY'
+  | 'COPY_WEEK'
+  | 'SAVE_TEMPLATE'
+  | 'APPLY_TEMPLATE'
+  | 'UPDATE_MOOD_CONFIG'
+  | 'APPLY_ACTIVITY_RANGE'
+  | 'INVITE_MEMBER'
+  | 'SETUP_PASSWORD';
+
 export interface AuditParams {
   actorId: string;
   targetUserId?: string | null;
-  action: 'LOGIN' | 'LOGOUT' | 'VIEW_MEMBER' | 'UPDATE_MEMO' | 'UPDATE_VISIBILITY' | 'UPDATE_SLOT' | 'DELETE_SLOT' | 'COPY_DAY' | 'COPY_WEEK' | 'SAVE_TEMPLATE' | 'APPLY_TEMPLATE' | 'UPDATE_MOOD_CONFIG' | 'APPLY_ACTIVITY_RANGE' | 'INVITE_MEMBER' | 'SETUP_PASSWORD';
+  action: AuditAction;
   ipAddress?: string;
   userAgent?: string;
   details?: Record<string, unknown>;

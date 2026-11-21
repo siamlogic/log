@@ -67,14 +67,36 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'メールアドレスまたはパスワードが正しくありません' }, { status: 401 });
     }
 
-    // 利用停止アカウントのアクセス遮断
-    if (user.status === 'suspended') {
-      return NextResponse.json({ error: 'このアカウントは利用停止されています。システム管理者にお問い合わせください。' }, { status: 403 });
-    }
+    // パスワード突合 (Argon2id 検証 & 旧ハッシュ後方互換)
+    // ユーザー列挙対策: 停止・招待・ロック判定より前にパスワードを検証し、タイミングおよび情報漏洩を遮断
+    const isPasswordValid = await verifyPassword(password, user.passwordHash);
+    if (!isPasswordValid) {
+      // 原子的インクリメントによる競合安全な失敗回数カウント
+      const updatedUser = await prisma.user.update({
+        where: { id: user.id },
+        data: { failedLoginAttempts: { increment: 1 } },
+      });
+      const willLock = updatedUser.failedLoginAttempts >= 5;
+      if (willLock) {
+        await prisma.user.update({
+          where: { id: user.id },
+          data: {
+            failedLoginAttempts: 0,
+            lockedUntil: new Date(Date.now() + 15 * 60 * 1000),
+          },
+        });
+      }
 
-    // 仮登録（招待中）アカウントの通常ログイン遮断
-    if (user.status === 'invited') {
-      return NextResponse.json({ error: '本登録が完了していません。招待メールのリンクからパスワードを設定してください。' }, { status: 401 });
+      await logAudit({
+        actorId: user.id,
+        action: willLock ? 'ACCOUNT_LOCKED' : 'LOGIN_FAILED',
+        details: { reason: 'invalid_password' },
+      });
+
+      return NextResponse.json({
+        error: willLock ? 'ログイン試行回数が超過したため15分間ロックされました' : 'メールアドレスまたはパスワードが正しくありません',
+        locked: willLock,
+      }, { status: 401 });
     }
 
     // アカウントロック判定 (5回失敗で15分ロック)
@@ -85,23 +107,14 @@ export async function POST(req: Request) {
       }, { status: 423 });
     }
 
-    // パスワード突合 (Argon2id 検証 & 旧ハッシュ後方互換)
-    const isPasswordValid = await verifyPassword(password, user.passwordHash);
-    if (!isPasswordValid) {
-      const attempts = user.failedLoginAttempts + 1;
-      const willLock = attempts >= 5;
-      await prisma.user.update({
-        where: { id: user.id },
-        data: {
-          failedLoginAttempts: attempts,
-          lockedUntil: willLock ? new Date(Date.now() + 15 * 60 * 1000) : null,
-        },
-      });
+    // 利用停止アカウントのアクセス遮断
+    if (user.status === 'suspended') {
+      return NextResponse.json({ error: 'このアカウントは利用停止されています。システム管理者にお問い合わせください。' }, { status: 403 });
+    }
 
-      return NextResponse.json({
-        error: willLock ? 'ログイン試行回数が超過したため15分間ロックされました' : 'メールアドレスまたはパスワードが正しくありません',
-        locked: willLock,
-      }, { status: 401 });
+    // 仮登録（招待中）アカウントの通常ログイン遮断
+    if (user.status === 'invited') {
+      return NextResponse.json({ error: '本登録が完了していません。招待メールのリンクからパスワードを設定してください。' }, { status: 401 });
     }
 
     // 旧レガシーハッシュだった場合は安全に最新セキュアハッシュへ自動移行
@@ -152,14 +165,25 @@ export async function POST(req: Request) {
       }
 
       if (!mfaValid) {
-        const attempts = user.failedLoginAttempts + 1;
-        const willLock = attempts >= 5;
-        await prisma.user.update({
+        const updatedUser = await prisma.user.update({
           where: { id: user.id },
-          data: {
-            failedLoginAttempts: attempts,
-            lockedUntil: willLock ? new Date(Date.now() + 15 * 60 * 1000) : null,
-          },
+          data: { failedLoginAttempts: { increment: 1 } },
+        });
+        const willLock = updatedUser.failedLoginAttempts >= 5;
+        if (willLock) {
+          await prisma.user.update({
+            where: { id: user.id },
+            data: {
+              failedLoginAttempts: 0,
+              lockedUntil: new Date(Date.now() + 15 * 60 * 1000),
+            },
+          });
+        }
+
+        await logAudit({
+          actorId: user.id,
+          action: willLock ? 'ACCOUNT_LOCKED' : 'MFA_FAILED',
+          details: { reason: replayError || 'invalid_code' },
         });
 
         const failureMessage = willLock
@@ -173,14 +197,34 @@ export async function POST(req: Request) {
       }
 
       // 2FA 検証成功時の状態更新 (リプレイ防止ステップ / リカバリーコード消費)
-      if (nextLastTotpStep !== null || nextRecoveryCodesJson !== null) {
-        await prisma.user.update({
-          where: { id: user.id },
-          data: {
-            ...(nextLastTotpStep !== null ? { lastTotpStep: nextLastTotpStep } : {}),
-            ...(nextRecoveryCodesJson !== null ? { mfaRecoveryCodes: nextRecoveryCodesJson } : {}),
+      // 条件付き更新により、同時リクエストによるリプレイや重複消費をDBレベルで確実に遮断
+      if (nextLastTotpStep !== null) {
+        const updateRes = await prisma.user.updateMany({
+          where: {
+            id: user.id,
+            OR: [
+              { lastTotpStep: null },
+              { lastTotpStep: { lt: nextLastTotpStep } },
+            ],
           },
+          data: { lastTotpStep: nextLastTotpStep },
         });
+        if (updateRes.count === 0) {
+          return NextResponse.json({ error: '認証コードが既に再利用されています（リプレイ防止）' }, { status: 401 });
+        }
+      }
+
+      if (nextRecoveryCodesJson !== null) {
+        const updateRes = await prisma.user.updateMany({
+          where: {
+            id: user.id,
+            mfaRecoveryCodes: user.mfaRecoveryCodes,
+          },
+          data: { mfaRecoveryCodes: nextRecoveryCodesJson },
+        });
+        if (updateRes.count === 0) {
+          return NextResponse.json({ error: 'リカバリーコードが既に消費されています' }, { status: 401 });
+        }
       }
     }
 

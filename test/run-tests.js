@@ -451,8 +451,8 @@ async function runTests() {
     memberCookie
   );
   assert(
-    invalidDateRes.statusCode === 500 || invalidDateRes.statusCode === 400,
-    'CLN-03: Non-existent calendar date (2026-02-31) is rejected without silent rollover'
+    invalidDateRes.statusCode === 400,
+    'CLN-03: Non-existent calendar date (2026-02-31) is rejected with 400 Bad Request'
   );
 
   // 6-4. SEC-06: Huge Password Rejected

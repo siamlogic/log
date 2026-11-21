@@ -25,7 +25,7 @@ journalctl -u cbt-app -n 100 -f
 ### 1.2 サービスヘルスチェック
 外部監視ツールまたは監視スクリプトより、以下のエンドポイントを定期的に疎通確認します。
 - **URL**: `http://localhost:3001/api/auth/me`（または `https://<FQDN>/api/auth/me`）
-- **期待レスポンス**: HTTP 200 (OK)
+- **期待レスポンス**: 未認証時 HTTP 401 (セッション認証必須APIのため、401応答によりサーバーおよびNext.jsプロセスの正常稼働・Readinessを確認)
 
 ---
 
@@ -35,24 +35,45 @@ journalctl -u cbt-app -n 100 -f
 SQLite 3 では、WALモード（Write-Ahead Logging）で整合性を保ちながらオンラインバックアップを実施可能です。
 
 ```bash
-# SQLite オンラインセーフバックアップ (sqlite3 CLI または VACUUM INTO)
+# 1. バックアップディレクトリの準備
+mkdir -p backups
+
+# 2. SQLite オンラインセーフバックアップ (VACUUM INTO による完全アトミックスナップショット)
 BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
 sqlite3 prisma/dev.db "VACUUM INTO 'backups/cbt_backup_${BACKUP_DATE}.db'"
 
-# バックアップファイルの暗号化保管
-gpg --symmetric --cipher-algo AES256 backups/cbt_backup_${BACKUP_DATE}.db
+# 3. バックアップファイルの暗号化保管 (パスフレーズによるAES-256暗号化)
+gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase-file /etc/cbt/backup_passphrase.key backups/cbt_backup_${BACKUP_DATE}.db
+
+# 4. 暗号化成功時に平文DBスナップショットを安全消去
+if [ -f "backups/cbt_backup_${BACKUP_DATE}.db.gpg" ]; then
+  rm -f backups/cbt_backup_${BACKUP_DATE}.db
+fi
 ```
 
 ### 2.2 リストア（復旧）手順
 ```bash
-# 1. サービスの安全な停止
+# 1. サービスの安全な停止 (書き込み停止)
 pm2 stop cbt-app
 
-# 2. 既存DBファイルの退避とバックアップからの復元
-mv prisma/dev.db prisma/dev.db.bak
-cp backups/cbt_backup_<DATE>.db prisma/dev.db
+# 2. 暗号化バックアップの復号
+gpg --batch --yes --decrypt --passphrase-file /etc/cbt/backup_passphrase.key -o backups/restore_temp.db backups/cbt_backup_<DATE>.db.gpg
 
-# 3. サービスの再起動
+# 3. 既存DBファイル群の退避 (古いWAL/SHMが残ると復旧データが破損するため一括退避)
+mkdir -p prisma/old_db_backup
+mv prisma/dev.db prisma/old_db_backup/dev.db.$(date +%Y%m%d_%H%M%S) 2>/dev/null || true
+mv prisma/dev.db-wal prisma/old_db_backup/dev.db-wal.$(date +%Y%m%d_%H%M%S) 2>/dev/null || true
+mv prisma/dev.db-shm prisma/old_db_backup/dev.db-shm.$(date +%Y%m%d_%H%M%S) 2>/dev/null || true
+
+# 4. 復号したDBファイルの配置
+cp backups/restore_temp.db prisma/dev.db
+rm -f backups/restore_temp.db
+
+# 5. DBの整合性検査 (Integrity Check)
+sqlite3 prisma/dev.db "PRAGMA integrity_check;"
+# 出力が "ok" であることを確認
+
+# 6. サービスの再起動
 pm2 start cbt-app
 ```
 

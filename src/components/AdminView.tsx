@@ -487,7 +487,7 @@ export function AdminView() {
           onClose={() => setShowInviteModal(false)}
           onMemberInvited={(newMember) => {
             setMembers((prev) => [newMember, ...prev]);
-            setSelectedMember(newMember);
+            handleSelectMember(newMember);
           }}
         />
       )}

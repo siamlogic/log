@@ -35,8 +35,11 @@ export async function PUT(req: Request) {
       return NextResponse.json({ error: '実在する有効な日付（YYYY-MM-DD）を指定してください' }, { status: 400 });
     }
 
+    if (typeof hourSlot !== 'number' && typeof hourSlot !== 'string') {
+      return NextResponse.json({ error: '時間枠の型が不正です' }, { status: 400 });
+    }
     const hour = Number(hourSlot);
-    if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+    if (!Number.isInteger(hour) || hour < 0 || hour > 23 || (typeof hourSlot === 'string' && hourSlot.trim() === '')) {
       return NextResponse.json({ error: '時間枠は 0〜23 の整数を指定してください' }, { status: 400 });
     }
 
@@ -54,12 +57,14 @@ export async function PUT(req: Request) {
     let parsedSymbol: string | null = null;
 
     if (hasMood) {
-      const numScore = Number(moodScore);
-      if (Number.isNaN(numScore) || numScore < 0.0 || numScore > 1.0) {
+      if (typeof moodScore !== 'number') {
+        return NextResponse.json({ error: '気分スコアは数値で指定してください' }, { status: 400 });
+      }
+      if (Number.isNaN(moodScore) || moodScore < 0.0 || moodScore > 1.0) {
         return NextResponse.json({ error: '気分スコアは 0.00〜1.00 の範囲で指定してください' }, { status: 400 });
       }
-      parsedMoodScore = Number(numScore.toFixed(3));
-      parsedRawLevel = moodRawLevel !== null && moodRawLevel !== undefined ? Number(moodRawLevel) : null;
+      parsedMoodScore = Number(moodScore.toFixed(3));
+      parsedRawLevel = moodRawLevel !== null && moodRawLevel !== undefined && typeof moodRawLevel === 'number' ? moodRawLevel : null;
       parsedSymbol = moodDisplaySymbol ? String(moodDisplaySymbol).slice(0, 32) : null;
     }
     // hasMood が false の場合は moodScore, moodRawLevel, moodDisplaySymbol をすべて null に正規化 (臨床安全性)
@@ -116,8 +121,11 @@ export async function DELETE(req: Request) {
       return NextResponse.json({ error: '実在する有効な日付（YYYY-MM-DD）を指定してください' }, { status: 400 });
     }
 
+    if (typeof hourSlot !== 'number' && typeof hourSlot !== 'string') {
+      return NextResponse.json({ error: '時間枠の型が不正です' }, { status: 400 });
+    }
     const hour = Number(hourSlot);
-    if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+    if (!Number.isInteger(hour) || hour < 0 || hour > 23 || (typeof hourSlot === 'string' && hourSlot.trim() === '')) {
       return NextResponse.json({ error: '時間枠は 0〜23 の整数を指定してください' }, { status: 400 });
     }
 

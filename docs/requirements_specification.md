@@ -50,8 +50,8 @@ sequenceDiagram
 
     Admin->>System: メンバー仮登録（メールアドレス、氏名/表示名）
     System->>System: 仮登録トークン発行（有効期限48時間）
-    System-->>Mail: 本登録・初期パスワード設定案内メール送信
-    Mail-->>Member: 招待案内を受信
+    System-->>Admin: 招待リンクの生成・画面表示（クリップボードコピー提供）
+    Admin-->>Member: 招待URLを直接またはセキュアチャット/対面で共有（※SMTP自動送信はFR-AUTH-03将来拡張要求）
     Member->>System: 案内URLにアクセス
     Member->>System: 新規パスワード設定 (必要に応じて2FA有効化)
     System->>System: アカウント有効化（status: active へ遷移）

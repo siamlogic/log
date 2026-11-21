@@ -78,6 +78,7 @@ export function TemplateModal({
                 <button
                   key={tpl.id}
                   type="button"
+                  aria-pressed={selectedTemplateId === tpl.id}
                   onClick={() => setSelectedTemplateId(tpl.id)}
                   className={`p-2.5 rounded-xl border text-left transition ${
                     selectedTemplateId === tpl.id
@@ -121,6 +122,7 @@ export function TemplateModal({
                   <button
                     key={d.key}
                     type="button"
+                    aria-pressed={isSelected}
                     onClick={() => toggleDay(d.key)}
                     className={`py-2 px-1 rounded-lg border text-center transition ${
                       isSelected

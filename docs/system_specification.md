@@ -355,7 +355,7 @@ IDOR（水平権限昇格）を構造的に防止するため、**メンバー�
 ### 4.3 メンバー専用 CBT記録・操作系 API（`session.user.id` 強制バインド）
 | メソッド | エンドポイント | 説明 | 認証 | ロール |
 | :--- | :--- | :--- | :---: | :---: |
-| `GET` | `/api/cbt/activities/week?start_date=YYYY-MM-DD` | 自身の1週間分（7日×24時間）の記録一括取得 | 必須 | `member` |
+| `GET` | `/api/cbt/activities/week?monday=YYYY-MM-DD` | 自身の1週間分（7日×24時間）の記録一括取得 | 必須 | `member` |
 | `GET` | `/api/cbt/activities/month?year_month=YYYY-MM` | 自身の月間サマリー（日別記録数・平均気分スコア）取得 | 必須 | `member` |
 | `PUT` | `/api/cbt/activities/slot` | 特定1スロットの登録・更新（`mood_score: null` 対応） | 必須 | `member` |
 | `POST` | `/api/cbt/activities/range` | **複数スロット（時間帯範囲・就寝一括）の連続登録** | 必須 | `member` |
@@ -374,45 +374,44 @@ IDOR（水平権限昇格）を構造的に防止するため、**メンバー�
 - **リクエスト**:
 ```json
 {
-  "source_date": "2026-10-13",
-  "target_date": "2026-10-15",
-  "overwrite_non_empty": false,
-  "include_mood": false
+  "sourceDateYmd": "2026-10-13",
+  "targetDateYmd": "2026-10-15",
+  "overwriteNonEmpty": false,
+  "includeMood": false
 }
 ```
 - **レスポンス (200 OK)**:
 ```json
 {
-  "success": true,
-  "copied_slots_count": 15,
-  "skipped_slots_count": 2,
-  "target_date": "2026-10-15"
+  "copiedCount": 15
 }
 ```
 
 #### 例2: スロット更新 (`PUT /api/cbt/activities/slot`)
-- **リクエスト**（気分選択ありの場合 / 睡眠等で気分未記録の場合は `"mood_raw_level": null`）:
+- **リクエスト**（気分選択ありの場合 / 睡眠等で気分未記録の場合は `"moodScore": null, "moodRawLevel": null, "moodDisplaySymbol": null`）:
 ```json
 {
-  "record_date": "2026-10-15",
-  "hour_slot": 14,
-  "activity_name": "散歩とカフェ",
-  "mood_raw_level": 3,
+  "recordDateYmd": "2026-10-15",
+  "hourSlot": 14,
+  "activityName": "散歩とカフェ",
+  "moodScore": 0.75,
+  "moodRawLevel": 3,
+  "moodDisplaySymbol": "🌤️",
   "notes": "日差しが暖かく気分がすっきりした"
 }
 ```
-- **レスポンス (200 OK)**（※サーバー側で `mood_configurations` に基づき `mood_score` と `mood_display_symbol` を確定）:
+- **レスポンス (200 OK)**（※クライアントが設定に基づいて算出した `moodScore`, `moodRawLevel`, `moodDisplaySymbol` を検証・アトミック保存）:
 ```json
 {
   "id": "a5d89f82-3d84-4bf8-bf4a-d68a2bc1e091",
-  "record_date": "2026-10-15",
-  "hour_slot": 14,
-  "activity_name": "散歩とカフェ",
-  "mood_raw_level": 3,
-  "mood_score": 0.75,
-  "mood_display_symbol": "🌤️",
+  "recordDate": "2026-10-15T00:00:00.000Z",
+  "hourSlot": 14,
+  "activityName": "散歩とカフェ",
+  "moodRawLevel": 3,
+  "moodScore": 0.75,
+  "moodDisplaySymbol": "🌤️",
   "notes": "日差しが暖かく気分がすっきりした",
-  "updated_at": "2026-10-15T05:05:00Z"
+  "updatedAt": "2026-10-15T05:05:00.000Z"
 }
 ```
 

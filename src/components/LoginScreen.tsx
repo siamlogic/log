@@ -170,11 +170,14 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
 
               <div className="space-y-3.5">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5">メールアドレス</label>
+                  <label htmlFor="login-email" className="block text-xs font-bold text-slate-700 mb-1.5">メールアドレス</label>
                   <div className="relative">
                     <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" />
                     <input
+                      id="login-email"
+                      name="email"
                       type="email"
+                      autoComplete="username"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-teal-500 focus:border-teal-500 focus:outline-none text-sm"
@@ -184,11 +187,14 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5">パスワード</label>
+                  <label htmlFor="login-password" className="block text-xs font-bold text-slate-700 mb-1.5">パスワード</label>
                   <div className="relative">
                     <KeyRound className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" />
                     <input
+                      id="login-password"
+                      name="password"
                       type="password"
+                      autoComplete="current-password"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-teal-500 focus:border-teal-500 focus:outline-none text-sm"
@@ -216,12 +222,14 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 </button>
               </div>
 
-              <div className="mt-4 pt-4 border-t border-slate-100 text-[11px] text-slate-500 text-center space-y-1">
-                <p className="font-semibold text-slate-600">テスト用アカウント：</p>
-                <p>メンバー: <code className="bg-slate-100 px-1 rounded">tanaka@example.com</code> / <code className="bg-slate-100 px-1 rounded">password123</code></p>
-                <p>管理者: <code className="bg-slate-100 px-1 rounded">sato@example.com</code> / <code className="bg-slate-100 px-1 rounded">password123</code></p>
-                <p>2FA: <code className="bg-slate-100 px-1 rounded">2fa@example.com</code> / ロック: <code className="bg-slate-100 px-1 rounded">locked@example.com</code></p>
-              </div>
+              {process.env.NODE_ENV !== 'production' && (
+                <div className="mt-4 pt-4 border-t border-slate-100 text-[11px] text-slate-500 text-center space-y-1">
+                  <p className="font-semibold text-slate-600">テスト用アカウント：</p>
+                  <p>メンバー: <code className="bg-slate-100 px-1 rounded">tanaka@example.com</code> / <code className="bg-slate-100 px-1 rounded">password123</code></p>
+                  <p>管理者: <code className="bg-slate-100 px-1 rounded">sato@example.com</code> / <code className="bg-slate-100 px-1 rounded">password123</code></p>
+                  <p>2FA: <code className="bg-slate-100 px-1 rounded">2fa@example.com</code> / ロック: <code className="bg-slate-100 px-1 rounded">locked@example.com</code></p>
+                </div>
+              )}
             </form>
           )}
 
@@ -249,8 +257,13 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
 
               {mfaMode === 'totp' ? (
                 <div>
+                  <label htmlFor="mfa-totp-code" className="sr-only">2段階認証コード</label>
                   <input
+                    id="mfa-totp-code"
+                    name="mfaCode"
                     type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
                     maxLength={6}
                     value={mfaCode}
                     onChange={(e) => setMfaCode(e.target.value)}
@@ -276,8 +289,12 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 </div>
               ) : (
                 <div>
+                  <label htmlFor="mfa-recovery-code" className="sr-only">リカバリーコード</label>
                   <input
+                    id="mfa-recovery-code"
+                    name="recoveryCode"
                     type="text"
+                    autoComplete="off"
                     value={recoveryCode}
                     onChange={(e) => setRecoveryCode(e.target.value)}
                     placeholder="A8F2-9K1M"
@@ -331,11 +348,14 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
 
               <div className="space-y-3">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">登録メールアドレス</label>
+                  <label htmlFor="setup-email" className="block text-xs font-bold text-slate-700 mb-1">登録メールアドレス</label>
                   <div className="relative">
                     <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" />
                     <input
+                      id="setup-email"
+                      name="email"
                       type="email"
+                      autoComplete="username"
                       required
                       value={setupEmail}
                       onChange={(e) => setSetupEmail(e.target.value)}
@@ -346,11 +366,14 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">招待トークン</label>
+                  <label htmlFor="setup-token" className="block text-xs font-bold text-slate-700 mb-1">招待トークン</label>
                   <div className="relative">
                     <Key className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" />
                     <input
+                      id="setup-token"
+                      name="token"
                       type="text"
+                      autoComplete="off"
                       required
                       value={setupToken}
                       onChange={(e) => setSetupToken(e.target.value)}
@@ -361,11 +384,14 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">新しいパスワード (8文字以上)</label>
+                  <label htmlFor="setup-password" className="block text-xs font-bold text-slate-700 mb-1">新しいパスワード (8文字以上)</label>
                   <div className="relative">
                     <KeyRound className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" />
                     <input
+                      id="setup-password"
+                      name="newPassword"
                       type="password"
+                      autoComplete="new-password"
                       required
                       minLength={8}
                       value={setupPassword}
@@ -377,11 +403,14 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">パスワード（確認用）</label>
+                  <label htmlFor="setup-confirm-password" className="block text-xs font-bold text-slate-700 mb-1">パスワード（確認用）</label>
                   <div className="relative">
                     <KeyRound className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" />
                     <input
+                      id="setup-confirm-password"
+                      name="confirmPassword"
                       type="password"
+                      autoComplete="new-password"
                       required
                       minLength={8}
                       value={setupPasswordConfirm}

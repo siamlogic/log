@@ -114,9 +114,6 @@ erDiagram
         string details "メタデータ (平文PHI出力禁止 JSON)"
         datetime created_at
     }
-        jsonb details "メタデータ (平文PHI出力禁止)"
-        datetime created_at
-    }
 ```
 
 ---

@@ -74,7 +74,7 @@ NODE_ENV = "production"
 | `npm run build:pages` | `@cloudflare/next-on-pages` による Cloudflare Pages 用エッジビルド実行 |
 | `npm run pages:dev` | Wrangler ローカルエミュレータによる Pages 動作確認 |
 | `npm run pages:deploy` | ビルド済み成果物（`.vercel/output/static`）を Cloudflare Pages へ直接デプロイ |
-| `npm test` | 全47項目の自動テストスイート実行（Node.js / Edge両用ロジック検証） |
+| `npm test` | 自動テストスイート実行（機能統合テスト & セキュリティペネトレーションテスト） |
 
 ---
 
@@ -136,9 +136,9 @@ npm run pages:deploy
 
 Cloudflare Pages のグローバルエッジ環境で運用するにあたり、以下のセキュリティ原則がシステム全体で強制されています。
 
-1. **エッジCDNキャッシュ汚染の完全防止 (No-Store Enforcement)**:
-   - 本システムでは `next.config.mjs` および全API Route Handlers において `Cache-Control: no-store, no-cache, must-revalidate, private` を強制しています。
-   - Cloudflare のエッジキャッシュサーバーに他メンバーの活動記録や支援メモが保存・混入する事故は構造的に発生しません。
+1. **APIレスポンスのキャッシュ防止 (No-Store Enforcement)**:
+   - 本システムでは `next.config.mjs` のヘッダー設定（`/api/:path*` 対象）および全動的Route Handlersにおいて `Cache-Control: no-store, no-cache, must-revalidate, private` を強制しています。
+   - 要配慮個人情報を返却するAPIレスポンスがエッジキャッシュに混入することを防止します（HTMLページや静的アセットのキャッシュ挙動はCloudflareのキャッシュルール設定に準拠）。
 2. **Data Access Layer (DAL) による `admin_memo` 秘匿**:
    - 管理者支援メモ（`admin_memo`）は `server-only` DAL層（`src/lib/dal/cbt.ts`）で完全に除外された状態でクライアントへ返却されます。
 3. **エクスポート機能完全非搭載（DLP原則）**:
@@ -160,4 +160,4 @@ Cloudflare Pages のグローバルエッジ環境で運用するにあたり、
 | **Windowsローカルで `spawn bash ENOENT` が発生する** | `@cloudflare/next-on-pages` が内部で Linux bash を呼び出す仕様（Windowsネイティブ環境での制約） | `scripts/build-pages.js` が自動ガイダンスを表示します。Cloudflare Pages のリモートCI（Ubuntu Linuxコンテナ）では自動的に成功します。ローカル検証は `npm run dev` または WSL / Git Bash をご利用ください。 |
 | **ビルド時に peerDependencies エラーが発生する** | Next.js 14 のバージョンと `next-on-pages` の厳格なバージョン照合 | 本プロジェクトで固定されている `@cloudflare/next-on-pages@1.13.7` を使用してください（Next.js 14.2系と完全互換）。 |
 | **`@node-rs/argon2` がエッジで動かない** | Cloudflare Workers（V8 Isolate）は C++ ネイティブアドオン非対応 | `src/lib/auth-service.ts` にエッジ耐障害性レイヤー（PBKDF2-SHA256自動フォールバック）が実装されており、自動的に安全な暗号化が継続されます。 |
-| **ローカル SQLite (`dev.db`) にアクセスできない** | Cloudflare Pages Functions（エッジ）はステートレスでありローカルファイル書き込み不可 | 本番環境では環境変数 `DATABASE_URL` にマネージドPostgreSQL（Cloud SQL / Neon / Supabase）または Cloudflare D1 を指定してください。また、ローカルDBのまま運用したい場合は【モデル B: Cloudflare Tunnel ハイブリッド閉域構成】をご利用ください。 |
+| **ローカル SQLite (`dev.db`) にアクセスできない** | Cloudflare Pages Functions（エッジ）はステートレスでありローカルファイル書き込み不可。現行スキーマは `provider = "sqlite"` 設定 | 現行実装（単一サーバー・SQLite WAL運用）をそのままセキュア公開したい場合は、**【Cloudflare Tunnel（`cloudflared`）】** を用いてローカル/閉域サーバーへの安全なトンネル接続を行ってください。エッジ関数から直接マネージドDBへ接続する場合は、`prisma/schema.prisma` のプロバイダー変更（`postgresql` 等）および Workers 互換ドライバーアダプター（`@prisma/adapter-pg` / `@prisma/adapter-d1`）への切り替えが必要です。 |

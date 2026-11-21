@@ -34,6 +34,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: '実在する有効な日付（YYYY-MM-DD）を指定してください' }, { status: 400 });
     }
 
+    if (overwriteNonEmpty !== undefined && typeof overwriteNonEmpty !== 'boolean') {
+      return NextResponse.json({ error: 'overwriteNonEmpty は真偽値 (boolean) を指定してください' }, { status: 400 });
+    }
+    if (includeMood !== undefined && typeof includeMood !== 'boolean') {
+      return NextResponse.json({ error: 'includeMood は真偽値 (boolean) を指定してください' }, { status: 400 });
+    }
+
     const result = await copyDayActivities(user.id, {
       sourceDateYmd,
       targetDateYmd,

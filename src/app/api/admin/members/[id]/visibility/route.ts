@@ -33,12 +33,16 @@ export async function PATCH(
   try {
     const { isVisible, supportStatus } = body;
 
+    if (isVisible !== undefined && typeof isVisible !== 'boolean') {
+      return NextResponse.json({ error: 'isVisible は真偽値 (boolean) を指定してください' }, { status: 400 });
+    }
+
     if (supportStatus !== undefined && !['active', 'paused', 'completed'].includes(supportStatus)) {
       return NextResponse.json({ error: 'supportStatus は active, paused, completed のいずれかを指定してください' }, { status: 400 });
     }
 
     await updateMemberVisibilityForAdmin(user.id, targetMemberId, {
-      isVisible: isVisible !== undefined ? Boolean(isVisible) : undefined,
+      isVisible,
       supportStatus,
     });
 
