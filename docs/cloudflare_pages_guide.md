@@ -112,9 +112,11 @@ Cloudflare ダッシュボードから GitHub リポジトリを連携して自�
 
 ---
 
-## 4. Wrangler CLI によるダイレクトデプロイ
+## 4. デプロイ手順（Preview 環境 / 本番構成）
 
-CI/CD パイプラインやローカル端末から直接デプロイする場合の手順です。
+### 4.1 Wrangler CLI による Preview 環境デプロイ（検証・プレビュー専用）
+> [!IMPORTANT]
+> 本手順（`pages:deploy`）は **Preview 検証環境（Cloudflare D1 バインディング）専用** です。本番環境では単一サーバー・単一インスタンスのローカル SQLite（WALモード）＋ Cloudflare Tunnel（後述 4.2）を使用してください。
 
 ```bash
 # 1. Cloudflare にログイン (初回のみ)
@@ -126,8 +128,25 @@ npm run build:pages
 # 3. ローカルエミュレータで動作検証
 npm run pages:dev
 
-# 4. Cloudflare Pages 本番環境へデプロイ
-npm run pages:deploy
+# 4. Cloudflare Pages Preview 環境へデプロイ (Production ブランチ以外を指定)
+npx wrangler pages deploy .vercel/output/static --branch=preview
+```
+
+### 4.2 【本番推奨】単一サーバー（Node.js + ローカル SQLite WAL）＋ Cloudflare Tunnel 構成
+`AGENTS.md` および `docs/requirements_specification.md` に準拠し、**単一サーバー・単一インスタンス、Docker非使用、ローカル SQLite 3（WALモード）** で本番運用するための標準構成手順です（モデル B）。
+
+```bash
+# 1. 依存関係インストール・Prisma生成・ローカルDBマイグレーション
+npm ci
+npx prisma generate
+npm run db:push
+
+# 2. Next.js 本番ビルド & Node.js ネイティブプロセス起動 (単一サーバー完結)
+npm run build
+npm run start
+
+# 3. Cloudflare Tunnel (cloudflared) 経由で外部公開 (直接ポート開放なし)
+cloudflared tunnel run --url http://127.0.0.1:3001 <TUNNEL_NAME>
 ```
 
 ---
@@ -159,5 +178,5 @@ Cloudflare Pages のグローバルエッジ環境で運用するにあたり、
 | :--- | :--- | :--- |
 | **Windowsローカルで `spawn bash ENOENT` が発生する** | `@cloudflare/next-on-pages` が内部で Linux bash を呼び出す仕様（Windowsネイティブ環境での制約） | `scripts/build-pages.js` が自動ガイダンスを表示します。Cloudflare Pages のリモートCI（Ubuntu Linuxコンテナ）では自動的に成功します。ローカル検証は `npm run dev` または WSL / Git Bash をご利用ください。 |
 | **ビルド時に peerDependencies エラーが発生する** | Next.js 14 のバージョンと `next-on-pages` の厳格なバージョン照合 | 本プロジェクトで固定されている `@cloudflare/next-on-pages@1.13.7` を使用してください（Next.js 14.2系と完全互換）。 |
-| **`@node-rs/argon2` がエッジで動かない** | Cloudflare Workers（V8 Isolate）は C++ ネイティブアドオン非対応 | `src/lib/auth-service.ts` により Edge Runtime では Web Crypto API (`PBKDF2-SHA256`) へ自動フォールバックします。<br>・**テストデータ投入の注意**: `SEED_HASH_ALGO=pbkdf2 npm run db:seed` はハッシュ方式のみを変更し、通常の SQLite 用 `PrismaClient` で**既存行を全削除してサンプルデータを投入**するため、必ず**破棄可能なローカル検証用 DB** に限って実行してください（このコマンドではプレビュー D1 にデータは入りません）。専用のプレビュー D1 へテストデータだけを投入する場合は、① 一時 SQLite（例: `SEED_HASH_ALGO=pbkdf2 DATABASE_URL="file:./tmp-preview-seed.db" npx prisma db push --skip-generate && SEED_HASH_ALGO=pbkdf2 DATABASE_URL="file:./tmp-preview-seed.db" npm run db:seed`）でデータを生成し、② ネイティブ SQLite がミリ秒整数で保存する `DateTime` 列を `src/lib/prisma.ts` の `formatPrismaSqliteDate` と同じ UTC ISO 文字列（`+00:00` 形式）へ変換したテスト用 SQL を生成（例: `node -e "const { PrismaClient } = require('@prisma/client'); const p = new PrismaClient({ datasources: { db: { url: 'file:./tmp-preview-seed.db' } } }); const fmt = d => d ? d.toISOString().replace(/\.\d{3}Z$/, '+00:00') : null; /* 各テーブルの DateTime 列を fmt() 変換して INSERT 文を出力 */"`）した上で、③ `npx wrangler d1 execute cbt_preview_db --env preview --remote --file=<seed.sql>` で投入してください。<br>・**既存 Argon2id ユーザーの移行手順**: ① 有効なリセットトークンを発行し、② `setup-password` を実行する Node.js 環境に `PREFER_PBKDF2_HASH=true` を設定してパスワード再設定を実施し、③ 切替前に Edge 環境（Preview）でログインできることおよび変換後の日時値が D1 側で `DateTime` として読み取れること（週間活動記録が正しく表示されること）を確認してください。 |
+| **`@node-rs/argon2` がエッジで動かない** | Cloudflare Workers（V8 Isolate）は C++ ネイティブアドオン非対応 | `src/lib/auth-service.ts` により Edge Runtime では Web Crypto API (`PBKDF2-SHA256`) へ自動フォールバックします。<br>・**テストデータ投入の注意**: `SEED_HASH_ALGO=pbkdf2 npm run db:seed` はハッシュ方式のみを変更し、通常の SQLite 用 `PrismaClient` で**既存行を全削除してサンプルデータを投入**するため、必ず**破棄可能なローカル検証用 DB** に限って実行してください（このコマンドではプレビュー D1 にデータは入りません）。専用のプレビュー D1 へテストデータだけを投入する場合は、① 一時 SQLite（例: `SEED_HASH_ALGO=pbkdf2 DATABASE_URL="file:./tmp-preview-seed.db" npx prisma db push --skip-generate && SEED_HASH_ALGO=pbkdf2 DATABASE_URL="file:./tmp-preview-seed.db" npm run db:seed`）でデータを生成し、② ネイティブ SQLite がミリ秒整数で保存する `DateTime` 列を `src/lib/prisma.ts` の `formatPrismaSqliteDate` と同じ UTC ISO 文字列（`+00:00` 形式）へ変換したテスト用 SQL を生成（例: `node -e "const { PrismaClient } = require('@prisma/client'); const p = new PrismaClient({ datasources: { db: { url: 'file:./tmp-preview-seed.db' } } }); const fmt = d => d ? d.toISOString().replace(/\.\d{3}Z$/, '+00:00') : null; /* 各テーブルの DateTime 列を fmt() 変換して INSERT 文を出力 */"`）した上で、③ `npx wrangler d1 execute cbt_preview_db --env preview --remote --file=<seed.sql>` で投入してください。<br>・**既存 Argon2id ユーザーの移行手順**: ① 有効なリセットトークンを発行し、② `setup-password` を実行する Node.js 環境に `PREFER_PBKDF2_HASH=true` を設定してパスワード再設定を実施します（なお `setup-password` が更新する `password_hash` はローカル SQLite にのみ保存され、Preview D1 へは自動反映されません）。③ そのため、対象ユーザーだけを更新する SQL（例: `UPDATE "users" SET "password_hash" = '<pbkdf2_hash>' WHERE "email" = '<user_email>';`）を生成し、`npx wrangler d1 execute cbt_preview_db --env preview --remote --file=<update.sql>` で Preview D1 に適用してください。④ 切替前に Edge 環境（Preview）でログインできることおよび変換後の日時値が D1 側で `DateTime` として読み取れること（週間活動記録が正しく表示されること）を確認してください。 |
 | **ローカル SQLite (`dev.db`) と Cloudflare D1 の切り替え（Preview 検証用途限定）** | Cloudflare Pages Functions ではローカルファイル書き込み不可 | `src/lib/prisma.ts` の透過的 Proxy が、`env.DB`（D1 バインディング）の有無を自動判定して D1 とローカル SQLite を切り替えます。**※D1 構成は Preview 検証用途に限定され、本番運用は [AGENTS.md](../AGENTS.md) および [要件定義書](./requirements_specification.md) に準拠した単一インスタンスのローカル SQLite（WALモード）＋ Cloudflare Tunnel 構成を正とします（Production 設定には `DB` バインディングを追加しないでください）。** Preview 環境で CLI 経由で D1 を適用・参照するには、① `wrangler.toml` の `[[env.preview.d1_databases]]` を有効化して `database_id` に Preview 用 D1 の ID を設定し（Production 設定は変更しない）、② `npm run db:d1:schema` で生成した `prisma/d1-schema.sql` を `database_name`（`cbt_preview_db`）または `binding`（`DB`）を指定して `npx wrangler d1 execute cbt_preview_db --env preview --remote --file=prisma/d1-schema.sql` で適用してください。あわせて Pages ダッシュボードの **[Settings]** > **[Functions]** > **[D1 database bindings]** にて **Preview 環境のみ** に変数名 **`DB`** で対象 D1 をバインドして再デプロイしてください。 |
