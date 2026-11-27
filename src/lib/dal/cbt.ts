@@ -190,6 +190,16 @@ export async function copyDayActivities(
     const exists = existingMap.has(slot.hourSlot);
     if (exists && !params.overwriteNonEmpty) continue;
 
+    const updateData = params.overwriteNonEmpty
+      ? {
+          activityName: slot.activityName,
+          moodScore: params.includeMood ? slot.moodScore : null,
+          moodRawLevel: params.includeMood ? slot.moodRawLevel : null,
+          moodDisplaySymbol: params.includeMood ? slot.moodDisplaySymbol : null,
+          notes: slot.notes,
+        }
+      : {}; // 上書き禁止時は競合で後から追加された枠を保護するため update を空にする
+
     ops.push(
       prisma.cbtActivity.upsert({
         where: {
@@ -199,13 +209,7 @@ export async function copyDayActivities(
             hourSlot: slot.hourSlot,
           },
         },
-        update: {
-          activityName: slot.activityName,
-          moodScore: params.includeMood ? slot.moodScore : null,
-          moodRawLevel: params.includeMood ? slot.moodRawLevel : null,
-          moodDisplaySymbol: params.includeMood ? slot.moodDisplaySymbol : null,
-          notes: slot.notes,
-        },
+        update: updateData,
         create: {
           userId: sessionUserId,
           recordDate: targetUtc,
@@ -281,6 +285,16 @@ export async function copyWeekActivities(
       const key = `${tgtDateStr}_${slot.hourSlot}`;
       if (existingMap.has(key) && !params.overwriteNonEmpty) continue;
 
+      const updateData = params.overwriteNonEmpty
+        ? {
+            activityName: slot.activityName,
+            moodScore: params.includeMood ? slot.moodScore : null,
+            moodRawLevel: params.includeMood ? slot.moodRawLevel : null,
+            moodDisplaySymbol: params.includeMood ? slot.moodDisplaySymbol : null,
+            notes: slot.notes,
+          }
+        : {}; // 上書き禁止時は競合で後から追加された枠を保護
+
       ops.push(
         prisma.cbtActivity.upsert({
           where: {
@@ -290,13 +304,7 @@ export async function copyWeekActivities(
               hourSlot: slot.hourSlot,
             },
           },
-          update: {
-            activityName: slot.activityName,
-            moodScore: params.includeMood ? slot.moodScore : null,
-            moodRawLevel: params.includeMood ? slot.moodRawLevel : null,
-            moodDisplaySymbol: params.includeMood ? slot.moodDisplaySymbol : null,
-            notes: slot.notes,
-          },
+          update: updateData,
           create: {
             userId: sessionUserId,
             recordDate: tgtDateUtc,
@@ -356,6 +364,15 @@ export async function applyTemplateToDays(
       const hour = Number(hourStr);
       if (existingKeys.has(`${dateYmd}_${hour}`) && !params.overwriteNonEmpty) continue;
 
+      const updateData = params.overwriteNonEmpty
+        ? {
+            activityName: actName,
+            moodScore: null,
+            moodRawLevel: null,
+            moodDisplaySymbol: null,
+          }
+        : {}; // 上書き禁止時は競合で後から追加された枠を保護
+
       ops.push(
         prisma.cbtActivity.upsert({
           where: {
@@ -365,12 +382,7 @@ export async function applyTemplateToDays(
               hourSlot: hour,
             },
           },
-          update: {
-            activityName: actName,
-            moodScore: null,
-            moodRawLevel: null,
-            moodDisplaySymbol: null,
-          },
+          update: updateData,
           create: {
             userId: sessionUserId,
             recordDate: dateUtc,
@@ -581,34 +593,67 @@ export async function applyActivityRange(
       }
     }
 
-    ops.push(
-      prisma.cbtActivity.upsert({
-        where: {
-          userId_recordDate_hourSlot: {
+    const payloadData = {
+      activityName: params.activityName,
+      moodScore: params.moodScore,
+      moodRawLevel: params.moodRawLevel,
+      moodDisplaySymbol: params.moodDisplaySymbol,
+      notes: params.notes ?? null,
+    };
+
+    if (params.overwriteNonEmpty || (shouldProtect && params.allowFirstSlotOverwrite && item.isFirst)) {
+      ops.push(
+        prisma.cbtActivity.upsert({
+          where: {
+            userId_recordDate_hourSlot: {
+              userId: sessionUserId,
+              recordDate: item.targetDateUtc,
+              hourSlot: item.targetHour,
+            },
+          },
+          update: payloadData,
+          create: {
             userId: sessionUserId,
             recordDate: item.targetDateUtc,
             hourSlot: item.targetHour,
+            ...payloadData,
           },
-        },
-        update: {
-          activityName: params.activityName,
-          moodScore: params.moodScore,
-          moodRawLevel: params.moodRawLevel,
-          moodDisplaySymbol: params.moodDisplaySymbol,
-          notes: params.notes ?? null,
-        },
-        create: {
-          userId: sessionUserId,
-          recordDate: item.targetDateUtc,
-          hourSlot: item.targetHour,
-          activityName: params.activityName,
-          moodScore: params.moodScore,
-          moodRawLevel: params.moodRawLevel,
-          moodDisplaySymbol: params.moodDisplaySymbol,
-          notes: params.notes ?? null,
-        },
-      })
-    );
+        })
+      );
+    } else if (isSameBlock && existingAct !== undefined) {
+      // 同一ブロックの更新時は、取得時の活動名が変更されていないことを条件に楽観的ロック更新
+      ops.push(
+        prisma.cbtActivity.updateMany({
+          where: {
+            userId: sessionUserId,
+            recordDate: item.targetDateUtc,
+            hourSlot: item.targetHour,
+            activityName: existingAct,
+          },
+          data: payloadData,
+        })
+      );
+    } else {
+      // 新規空枠への書込み時は、競合で後から追加された枠を上書きしないよう update を空にする
+      ops.push(
+        prisma.cbtActivity.upsert({
+          where: {
+            userId_recordDate_hourSlot: {
+              userId: sessionUserId,
+              recordDate: item.targetDateUtc,
+              hourSlot: item.targetHour,
+            },
+          },
+          update: {},
+          create: {
+            userId: sessionUserId,
+            recordDate: item.targetDateUtc,
+            hourSlot: item.targetHour,
+            ...payloadData,
+          },
+        })
+      );
+    }
   }
 
   if (ops.length > 0) {
