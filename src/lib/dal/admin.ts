@@ -1,5 +1,5 @@
 import 'server-only';
-import { prisma } from '../prisma';
+import { getD1Binding, prisma } from '../prisma';
 import { randomBytesHex, sha256Hex } from '../web-crypto';
 import { getWeekActivitiesForUser } from './cbt';
 import type { MemberSummaryDTO, WeekActivitiesDTO } from './types';
@@ -207,7 +207,77 @@ export async function inviteMemberByAdmin(
   const hashedToken = await sha256Hex(rawInviteToken);
   const tokenExpiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48時間有効
   const newUserId = globalThis.crypto.randomUUID();
-  const memoUpdatedAt = new Date();
+  const relationId = globalThis.crypto.randomUUID();
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const supportStatus = params.supportStatus || 'active';
+  const adminMemo = '仮登録完了。初回パスワード設定待ち。';
+  const memoUpdatedBy = '管理者仮登録';
+  const avatarColor = 'bg-indigo-100 text-indigo-800';
+
+  const d1 = getD1Binding();
+  if (d1) {
+    // Cloudflare D1 ではネイティブ DB.batch() により途中失敗時の全件ロールバックを保証
+    await d1.batch([
+      d1
+        .prepare(
+          'INSERT INTO "users" ("id", "email", "password_hash", "role", "status", "failed_login_attempts", "mfa_enabled", "token_version", "reset_token", "reset_expires_at", "created_at", "updated_at") VALUES (?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?)'
+        )
+        .bind(
+          newUserId,
+          email,
+          'INVITED_PENDING_PASSWORD',
+          'member',
+          'invited',
+          hashedToken,
+          tokenExpiresAt.toISOString(),
+          nowIso,
+          nowIso
+        ),
+      d1
+        .prepare(
+          'INSERT INTO "user_profiles" ("user_id", "display_name", "avatar_color", "created_at", "updated_at") VALUES (?, ?, ?, ?, ?)'
+        )
+        .bind(newUserId, displayName, avatarColor, nowIso, nowIso),
+      d1
+        .prepare(
+          'INSERT INTO "mood_configurations" ("user_id", "emotion_label", "style_type", "scale_steps", "created_at", "updated_at") VALUES (?, ?, ?, ?, ?, ?)'
+        )
+        .bind(newUserId, '気分の良さ', 'weather', 5, nowIso, nowIso),
+      d1
+        .prepare(
+          'INSERT INTO "admin_member_relations" ("id", "admin_id", "member_id", "support_status", "is_visible", "admin_memo", "memo_updated_at", "memo_updated_by", "created_at", "updated_at") VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)'
+        )
+        .bind(
+          relationId,
+          sessionAdminId,
+          newUserId,
+          supportStatus,
+          adminMemo,
+          nowIso,
+          memoUpdatedBy,
+          nowIso,
+          nowIso
+        ),
+    ]);
+
+    return {
+      member: {
+        id: newUserId,
+        name: displayName,
+        email,
+        avatarColor,
+        supportStatus,
+        isVisible: true,
+        status: 'invited',
+        lastRecordDate: '招待中（未記録）',
+        adminMemo,
+        memoUpdatedAt: nowIso,
+        memoUpdatedBy,
+      },
+      inviteToken: rawInviteToken,
+    };
+  }
 
   const [newUser, relation] = await prisma.$transaction([
     // 1. 仮登録ユーザー作成 (ステータス: invited)
@@ -223,7 +293,7 @@ export async function inviteMemberByAdmin(
         profile: {
           create: {
             displayName,
-            avatarColor: 'bg-indigo-100 text-indigo-800',
+            avatarColor,
           },
         },
         moodConfiguration: {
@@ -241,13 +311,14 @@ export async function inviteMemberByAdmin(
     // 2. 担当管理者とのリレーション作成
     prisma.adminMemberRelation.create({
       data: {
+        id: relationId,
         adminId: sessionAdminId,
         memberId: newUserId,
-        supportStatus: params.supportStatus || 'active',
+        supportStatus,
         isVisible: true,
-        adminMemo: '仮登録完了。初回パスワード設定待ち。',
-        memoUpdatedAt,
-        memoUpdatedBy: '管理者仮登録',
+        adminMemo,
+        memoUpdatedAt: now,
+        memoUpdatedBy,
       },
     }),
   ]);
@@ -256,7 +327,7 @@ export async function inviteMemberByAdmin(
     id: newUser.id,
     name: newUser.profile?.displayName ?? displayName,
     email: newUser.email,
-    avatarColor: newUser.profile?.avatarColor ?? 'bg-indigo-100 text-indigo-800',
+    avatarColor: newUser.profile?.avatarColor ?? avatarColor,
     supportStatus: relation.supportStatus,
     isVisible: relation.isVisible,
     status: newUser.status,

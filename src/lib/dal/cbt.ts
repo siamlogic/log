@@ -1,7 +1,165 @@
 import 'server-only';
-import { prisma } from '../prisma';
+import { getD1Binding, prisma } from '../prisma';
 import { parseYmdToUtcDate, formatUtcDateToYmd, generateWeekDays } from '../date-utils';
 import type { WeekActivitiesDTO, DayActivitiesDTO, ActivitySlotDTO, MoodConfigDTO, ActivityTemplateDTO } from './types';
+
+type CbtActivityWriteOp =
+  | {
+      mode: 'upsert_overwrite' | 'upsert_ignore';
+      userId: string;
+      recordDate: Date;
+      hourSlot: number;
+      activityName: string;
+      moodScore: number | null;
+      moodRawLevel: number | null;
+      moodDisplaySymbol: string | null;
+      notes?: string | null;
+    }
+  | {
+      mode: 'update_if_activity_matches';
+      userId: string;
+      recordDate: Date;
+      hourSlot: number;
+      expectedActivityName: string;
+      activityName: string;
+      moodScore: number | null;
+      moodRawLevel: number | null;
+      moodDisplaySymbol: string | null;
+      notes: string | null;
+    };
+
+/**
+ * 複数スロット書込みをローカル SQLite ($transaction) または Cloudflare D1 (ネイティブ DB.batch) で原子的に実行
+ */
+async function executeCbtActivityBatch(writes: CbtActivityWriteOp[]): Promise<void> {
+  if (writes.length === 0) return;
+
+  const d1 = getD1Binding();
+  if (d1) {
+    const nowIso = new Date().toISOString();
+    const statements = writes.map((w) => {
+      const recordDateIso = w.recordDate.toISOString();
+      if (w.mode === 'update_if_activity_matches') {
+        return d1
+          .prepare(
+            'UPDATE "cbt_activities" SET "activity_name" = ?, "mood_score" = ?, "mood_raw_level" = ?, "mood_display_symbol" = ?, "notes" = ?, "updated_at" = ? WHERE "user_id" = ? AND "record_date" = ? AND "hour_slot" = ? AND "activity_name" = ?'
+          )
+          .bind(
+            w.activityName,
+            w.moodScore,
+            w.moodRawLevel,
+            w.moodDisplaySymbol,
+            w.notes,
+            nowIso,
+            w.userId,
+            recordDateIso,
+            w.hourSlot,
+            w.expectedActivityName
+          );
+      }
+
+      const id = globalThis.crypto.randomUUID();
+      const notesValue = w.notes ?? null;
+      if (w.mode === 'upsert_ignore') {
+        return d1
+          .prepare(
+            'INSERT INTO "cbt_activities" ("id", "user_id", "record_date", "hour_slot", "activity_name", "mood_score", "mood_raw_level", "mood_display_symbol", "notes", "created_at", "updated_at") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT("user_id", "record_date", "hour_slot") DO NOTHING'
+          )
+          .bind(
+            id,
+            w.userId,
+            recordDateIso,
+            w.hourSlot,
+            w.activityName,
+            w.moodScore,
+            w.moodRawLevel,
+            w.moodDisplaySymbol,
+            notesValue,
+            nowIso,
+            nowIso
+          );
+      }
+
+      const notesUpdateClause = w.notes !== undefined ? ', "notes" = excluded."notes"' : '';
+      return d1
+        .prepare(
+          `INSERT INTO "cbt_activities" ("id", "user_id", "record_date", "hour_slot", "activity_name", "mood_score", "mood_raw_level", "mood_display_symbol", "notes", "created_at", "updated_at") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT("user_id", "record_date", "hour_slot") DO UPDATE SET "activity_name" = excluded."activity_name", "mood_score" = excluded."mood_score", "mood_raw_level" = excluded."mood_raw_level", "mood_display_symbol" = excluded."mood_display_symbol"${notesUpdateClause}, "updated_at" = excluded."updated_at"`
+        )
+        .bind(
+          id,
+          w.userId,
+          recordDateIso,
+          w.hourSlot,
+          w.activityName,
+          w.moodScore,
+          w.moodRawLevel,
+          w.moodDisplaySymbol,
+          notesValue,
+          nowIso,
+          nowIso
+        );
+    });
+
+    await d1.batch(statements);
+    return;
+  }
+
+  const ops = writes.map((w) => {
+    if (w.mode === 'update_if_activity_matches') {
+      return prisma.cbtActivity.updateMany({
+        where: {
+          userId: w.userId,
+          recordDate: w.recordDate,
+          hourSlot: w.hourSlot,
+          activityName: w.expectedActivityName,
+        },
+        data: {
+          activityName: w.activityName,
+          moodScore: w.moodScore,
+          moodRawLevel: w.moodRawLevel,
+          moodDisplaySymbol: w.moodDisplaySymbol,
+          notes: w.notes,
+        },
+      });
+    }
+
+    const createData = {
+      userId: w.userId,
+      recordDate: w.recordDate,
+      hourSlot: w.hourSlot,
+      activityName: w.activityName,
+      moodScore: w.moodScore,
+      moodRawLevel: w.moodRawLevel,
+      moodDisplaySymbol: w.moodDisplaySymbol,
+      ...(w.notes !== undefined ? { notes: w.notes } : {}),
+    };
+
+    const updateData =
+      w.mode === 'upsert_overwrite'
+        ? {
+            activityName: w.activityName,
+            moodScore: w.moodScore,
+            moodRawLevel: w.moodRawLevel,
+            moodDisplaySymbol: w.moodDisplaySymbol,
+            ...(w.notes !== undefined ? { notes: w.notes } : {}),
+          }
+        : {};
+
+    return prisma.cbtActivity.upsert({
+      where: {
+        userId_recordDate_hourSlot: {
+          userId: w.userId,
+          recordDate: w.recordDate,
+          hourSlot: w.hourSlot,
+        },
+      },
+      update: updateData,
+      create: createData,
+    });
+  });
+
+  await prisma.$transaction(ops);
+}
 
 /**
  * 自身の1週間分の活動記録を取得
@@ -185,50 +343,27 @@ export async function copyDayActivities(
   });
   const existingMap = new Set(existingTargetSlots.map((s) => s.hourSlot));
 
-  const ops = [];
+  const writes: CbtActivityWriteOp[] = [];
   for (const slot of sourceSlots) {
     const exists = existingMap.has(slot.hourSlot);
     if (exists && !params.overwriteNonEmpty) continue;
 
-    const updateData = params.overwriteNonEmpty
-      ? {
-          activityName: slot.activityName,
-          moodScore: params.includeMood ? slot.moodScore : null,
-          moodRawLevel: params.includeMood ? slot.moodRawLevel : null,
-          moodDisplaySymbol: params.includeMood ? slot.moodDisplaySymbol : null,
-          notes: slot.notes,
-        }
-      : {}; // 上書き禁止時は競合で後から追加された枠を保護するため update を空にする
-
-    ops.push(
-      prisma.cbtActivity.upsert({
-        where: {
-          userId_recordDate_hourSlot: {
-            userId: sessionUserId,
-            recordDate: targetUtc,
-            hourSlot: slot.hourSlot,
-          },
-        },
-        update: updateData,
-        create: {
-          userId: sessionUserId,
-          recordDate: targetUtc,
-          hourSlot: slot.hourSlot,
-          activityName: slot.activityName,
-          moodScore: params.includeMood ? slot.moodScore : null,
-          moodRawLevel: params.includeMood ? slot.moodRawLevel : null,
-          moodDisplaySymbol: params.includeMood ? slot.moodDisplaySymbol : null,
-          notes: slot.notes,
-        },
-      })
-    );
+    writes.push({
+      mode: params.overwriteNonEmpty ? 'upsert_overwrite' : 'upsert_ignore',
+      userId: sessionUserId,
+      recordDate: targetUtc,
+      hourSlot: slot.hourSlot,
+      activityName: slot.activityName,
+      moodScore: params.includeMood ? slot.moodScore : null,
+      moodRawLevel: params.includeMood ? slot.moodRawLevel : null,
+      moodDisplaySymbol: params.includeMood ? slot.moodDisplaySymbol : null,
+      notes: slot.notes,
+    });
   }
 
-  if (ops.length > 0) {
-    await prisma.$transaction(ops);
-  }
+  await executeCbtActivityBatch(writes);
 
-  return { copiedCount: ops.length };
+  return { copiedCount: writes.length };
 }
 
 /**
@@ -271,7 +406,7 @@ export async function copyWeekActivities(
     existingTargetSlots.map((s) => `${formatUtcDateToYmd(s.recordDate)}_${s.hourSlot}`)
   );
 
-  const ops = [];
+  const writes: CbtActivityWriteOp[] = [];
   for (let i = 0; i < 7; i++) {
     const srcDateStr = sourceDays[i].dateStr;
     const tgtDateStr = targetDays[i].dateStr;
@@ -285,46 +420,23 @@ export async function copyWeekActivities(
       const key = `${tgtDateStr}_${slot.hourSlot}`;
       if (existingMap.has(key) && !params.overwriteNonEmpty) continue;
 
-      const updateData = params.overwriteNonEmpty
-        ? {
-            activityName: slot.activityName,
-            moodScore: params.includeMood ? slot.moodScore : null,
-            moodRawLevel: params.includeMood ? slot.moodRawLevel : null,
-            moodDisplaySymbol: params.includeMood ? slot.moodDisplaySymbol : null,
-            notes: slot.notes,
-          }
-        : {}; // 上書き禁止時は競合で後から追加された枠を保護
-
-      ops.push(
-        prisma.cbtActivity.upsert({
-          where: {
-            userId_recordDate_hourSlot: {
-              userId: sessionUserId,
-              recordDate: tgtDateUtc,
-              hourSlot: slot.hourSlot,
-            },
-          },
-          update: updateData,
-          create: {
-            userId: sessionUserId,
-            recordDate: tgtDateUtc,
-            hourSlot: slot.hourSlot,
-            activityName: slot.activityName,
-            moodScore: params.includeMood ? slot.moodScore : null,
-            moodRawLevel: params.includeMood ? slot.moodRawLevel : null,
-            moodDisplaySymbol: params.includeMood ? slot.moodDisplaySymbol : null,
-            notes: slot.notes,
-          },
-        })
-      );
+      writes.push({
+        mode: params.overwriteNonEmpty ? 'upsert_overwrite' : 'upsert_ignore',
+        userId: sessionUserId,
+        recordDate: tgtDateUtc,
+        hourSlot: slot.hourSlot,
+        activityName: slot.activityName,
+        moodScore: params.includeMood ? slot.moodScore : null,
+        moodRawLevel: params.includeMood ? slot.moodRawLevel : null,
+        moodDisplaySymbol: params.includeMood ? slot.moodDisplaySymbol : null,
+        notes: slot.notes,
+      });
     }
   }
 
-  if (ops.length > 0) {
-    await prisma.$transaction(ops);
-  }
+  await executeCbtActivityBatch(writes);
 
-  return { copiedCount: ops.length };
+  return { copiedCount: writes.length };
 }
 
 /**
@@ -356,7 +468,7 @@ export async function applyTemplateToDays(
     existing.map((e) => `${formatUtcDateToYmd(e.recordDate)}_${e.hourSlot}`)
   );
 
-  const ops = [];
+  const writes: CbtActivityWriteOp[] = [];
   for (const dateYmd of params.targetDatesYmd) {
     const dateUtc = parseYmdToUtcDate(dateYmd);
 
@@ -364,44 +476,22 @@ export async function applyTemplateToDays(
       const hour = Number(hourStr);
       if (existingKeys.has(`${dateYmd}_${hour}`) && !params.overwriteNonEmpty) continue;
 
-      const updateData = params.overwriteNonEmpty
-        ? {
-            activityName: actName,
-            moodScore: null,
-            moodRawLevel: null,
-            moodDisplaySymbol: null,
-          }
-        : {}; // 上書き禁止時は競合で後から追加された枠を保護
-
-      ops.push(
-        prisma.cbtActivity.upsert({
-          where: {
-            userId_recordDate_hourSlot: {
-              userId: sessionUserId,
-              recordDate: dateUtc,
-              hourSlot: hour,
-            },
-          },
-          update: updateData,
-          create: {
-            userId: sessionUserId,
-            recordDate: dateUtc,
-            hourSlot: hour,
-            activityName: actName,
-            moodScore: null,
-            moodRawLevel: null,
-            moodDisplaySymbol: null,
-          },
-        })
-      );
+      writes.push({
+        mode: params.overwriteNonEmpty ? 'upsert_overwrite' : 'upsert_ignore',
+        userId: sessionUserId,
+        recordDate: dateUtc,
+        hourSlot: hour,
+        activityName: actName,
+        moodScore: null,
+        moodRawLevel: null,
+        moodDisplaySymbol: null,
+      });
     }
   }
 
-  if (ops.length > 0) {
-    await prisma.$transaction(ops);
-  }
+  await executeCbtActivityBatch(writes);
 
-  return { appliedCount: ops.length };
+  return { appliedCount: writes.length };
 }
 
 /**
@@ -570,7 +660,7 @@ export async function applyActivityRange(
 
   // 連続ブロック追跡: 先頭から同名活動が連続している間のみ同一ブロックと判定
   let inContinuousBlock = true;
-  const ops = [];
+  const writes: CbtActivityWriteOp[] = [];
 
   for (const item of targetSlots) {
     const key = `${item.targetYmd}_${item.targetHour}`;
@@ -593,75 +683,53 @@ export async function applyActivityRange(
       }
     }
 
-    const payloadData = {
-      activityName: params.activityName,
-      moodScore: params.moodScore,
-      moodRawLevel: params.moodRawLevel,
-      moodDisplaySymbol: params.moodDisplaySymbol,
-      notes: params.notes ?? null,
-    };
-
+    const notes = params.notes ?? null;
     if (params.overwriteNonEmpty || (shouldProtect && params.allowFirstSlotOverwrite && item.isFirst)) {
-      ops.push(
-        prisma.cbtActivity.upsert({
-          where: {
-            userId_recordDate_hourSlot: {
-              userId: sessionUserId,
-              recordDate: item.targetDateUtc,
-              hourSlot: item.targetHour,
-            },
-          },
-          update: payloadData,
-          create: {
-            userId: sessionUserId,
-            recordDate: item.targetDateUtc,
-            hourSlot: item.targetHour,
-            ...payloadData,
-          },
-        })
-      );
+      writes.push({
+        mode: 'upsert_overwrite',
+        userId: sessionUserId,
+        recordDate: item.targetDateUtc,
+        hourSlot: item.targetHour,
+        activityName: params.activityName,
+        moodScore: params.moodScore,
+        moodRawLevel: params.moodRawLevel,
+        moodDisplaySymbol: params.moodDisplaySymbol,
+        notes,
+      });
     } else if (isSameBlock && existingAct !== undefined) {
       // 同一ブロックの更新時は、取得時の活動名が変更されていないことを条件に楽観的ロック更新
-      ops.push(
-        prisma.cbtActivity.updateMany({
-          where: {
-            userId: sessionUserId,
-            recordDate: item.targetDateUtc,
-            hourSlot: item.targetHour,
-            activityName: existingAct,
-          },
-          data: payloadData,
-        })
-      );
+      writes.push({
+        mode: 'update_if_activity_matches',
+        userId: sessionUserId,
+        recordDate: item.targetDateUtc,
+        hourSlot: item.targetHour,
+        expectedActivityName: existingAct,
+        activityName: params.activityName,
+        moodScore: params.moodScore,
+        moodRawLevel: params.moodRawLevel,
+        moodDisplaySymbol: params.moodDisplaySymbol,
+        notes,
+      });
     } else {
-      // 新規空枠への書込み時は、競合で後から追加された枠を上書きしないよう update を空にする
-      ops.push(
-        prisma.cbtActivity.upsert({
-          where: {
-            userId_recordDate_hourSlot: {
-              userId: sessionUserId,
-              recordDate: item.targetDateUtc,
-              hourSlot: item.targetHour,
-            },
-          },
-          update: {},
-          create: {
-            userId: sessionUserId,
-            recordDate: item.targetDateUtc,
-            hourSlot: item.targetHour,
-            ...payloadData,
-          },
-        })
-      );
+      // 新規空枠への書込み時は、競合で後から追加された枠を上書きしないよう ignore モードで書込む
+      writes.push({
+        mode: 'upsert_ignore',
+        userId: sessionUserId,
+        recordDate: item.targetDateUtc,
+        hourSlot: item.targetHour,
+        activityName: params.activityName,
+        moodScore: params.moodScore,
+        moodRawLevel: params.moodRawLevel,
+        moodDisplaySymbol: params.moodDisplaySymbol,
+        notes,
+      });
     }
   }
 
-  if (ops.length > 0) {
-    await prisma.$transaction(ops);
-  }
+  await executeCbtActivityBatch(writes);
 
   return {
-    appliedCount: ops.length,
+    appliedCount: writes.length,
     affectedDates: Array.from(affectedDatesSet),
   };
 }
