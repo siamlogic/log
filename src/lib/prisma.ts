@@ -19,7 +19,7 @@ function getLocalPrismaClient(): PrismaClient {
   return globalForPrisma.prisma;
 }
 
-function getActivePrismaClient(): { client: PrismaClient; isD1: boolean } {
+function getActivePrismaClient(): PrismaClient {
   const env = getRuntimeEnv();
   if (env.DB && typeof env.DB === 'object') {
     const dbObj = env.DB as object;
@@ -32,30 +32,19 @@ function getActivePrismaClient(): { client: PrismaClient; isD1: boolean } {
       });
       d1ClientCache.set(dbObj, client);
     }
-    return { client, isD1: true };
+    return client;
   }
-  return { client: getLocalPrismaClient(), isD1: false };
+  return getLocalPrismaClient();
 }
 
 /**
  * ローカル SQLite (Node.js) と Cloudflare D1 (Pages Functions Edge) を
  * 実行時コンテキストに応じて自動的に切り替える透過的 Prisma Proxy
+ * (複数書込みの原子性を保つため、$transaction は配列バッチ形式を使用すること)
  */
 export const prisma: PrismaClient = new Proxy({} as PrismaClient, {
   get(_target, prop) {
-    const { client, isD1 } = getActivePrismaClient();
-
-    if (prop === '$transaction') {
-      return (arg: unknown, options?: unknown) => {
-        // Cloudflare D1 ドライバアダプターは対話型トランザクション(BEGIN/COMMIT)非対応のため、
-        // 関数型トランザクションのみ D1 上では逐次実行へフォールバックする（ローカル SQLite は厳密な ACID トランザクションを維持）
-        if (isD1 && typeof arg === 'function') {
-          return (arg as (tx: PrismaClient) => Promise<unknown>)(client);
-        }
-        return (client.$transaction as (...args: unknown[]) => unknown)(arg, options);
-      };
-    }
-
+    const client = getActivePrismaClient();
     const value = Reflect.get(client, prop, client);
     return typeof value === 'function' ? value.bind(client) : value;
   },

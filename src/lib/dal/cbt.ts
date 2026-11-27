@@ -180,18 +180,18 @@ export async function copyDayActivities(
 
   if (sourceSlots.length === 0) return { copiedCount: 0 };
 
-  let copied = 0;
-  await prisma.$transaction(async (tx) => {
-    const existingTargetSlots = await tx.cbtActivity.findMany({
-      where: { userId: sessionUserId, recordDate: targetUtc },
-    });
-    const existingMap = new Set(existingTargetSlots.map((s) => s.hourSlot));
+  const existingTargetSlots = await prisma.cbtActivity.findMany({
+    where: { userId: sessionUserId, recordDate: targetUtc },
+  });
+  const existingMap = new Set(existingTargetSlots.map((s) => s.hourSlot));
 
-    for (const slot of sourceSlots) {
-      const exists = existingMap.has(slot.hourSlot);
-      if (exists && !params.overwriteNonEmpty) continue;
+  const ops = [];
+  for (const slot of sourceSlots) {
+    const exists = existingMap.has(slot.hourSlot);
+    if (exists && !params.overwriteNonEmpty) continue;
 
-      await tx.cbtActivity.upsert({
+    ops.push(
+      prisma.cbtActivity.upsert({
         where: {
           userId_recordDate_hourSlot: {
             userId: sessionUserId,
@@ -216,12 +216,15 @@ export async function copyDayActivities(
           moodDisplaySymbol: params.includeMood ? slot.moodDisplaySymbol : null,
           notes: slot.notes,
         },
-      });
-      copied++;
-    }
-  });
+      })
+    );
+  }
 
-  return { copiedCount: copied };
+  if (ops.length > 0) {
+    await prisma.$transaction(ops);
+  }
+
+  return { copiedCount: ops.length };
 }
 
 /**
@@ -253,33 +256,33 @@ export async function copyWeekActivities(
 
   if (sourceSlots.length === 0) return { copiedCount: 0 };
 
-  let totalCopied = 0;
-  await prisma.$transaction(async (tx) => {
-    const existingTargetSlots = await tx.cbtActivity.findMany({
-      where: {
-        userId: sessionUserId,
-        recordDate: { gte: startTargetUtc, lte: endTargetUtc },
-      },
-    });
+  const existingTargetSlots = await prisma.cbtActivity.findMany({
+    where: {
+      userId: sessionUserId,
+      recordDate: { gte: startTargetUtc, lte: endTargetUtc },
+    },
+  });
 
-    const existingMap = new Set(
-      existingTargetSlots.map((s) => `${formatUtcDateToYmd(s.recordDate)}_${s.hourSlot}`)
+  const existingMap = new Set(
+    existingTargetSlots.map((s) => `${formatUtcDateToYmd(s.recordDate)}_${s.hourSlot}`)
+  );
+
+  const ops = [];
+  for (let i = 0; i < 7; i++) {
+    const srcDateStr = sourceDays[i].dateStr;
+    const tgtDateStr = targetDays[i].dateStr;
+    const tgtDateUtc = parseYmdToUtcDate(tgtDateStr);
+
+    const daySourceSlots = sourceSlots.filter(
+      (s) => formatUtcDateToYmd(s.recordDate) === srcDateStr
     );
 
-    for (let i = 0; i < 7; i++) {
-      const srcDateStr = sourceDays[i].dateStr;
-      const tgtDateStr = targetDays[i].dateStr;
-      const tgtDateUtc = parseYmdToUtcDate(tgtDateStr);
+    for (const slot of daySourceSlots) {
+      const key = `${tgtDateStr}_${slot.hourSlot}`;
+      if (existingMap.has(key) && !params.overwriteNonEmpty) continue;
 
-      const daySourceSlots = sourceSlots.filter(
-        (s) => formatUtcDateToYmd(s.recordDate) === srcDateStr
-      );
-
-      for (const slot of daySourceSlots) {
-        const key = `${tgtDateStr}_${slot.hourSlot}`;
-        if (existingMap.has(key) && !params.overwriteNonEmpty) continue;
-
-        await tx.cbtActivity.upsert({
+      ops.push(
+        prisma.cbtActivity.upsert({
           where: {
             userId_recordDate_hourSlot: {
               userId: sessionUserId,
@@ -304,13 +307,16 @@ export async function copyWeekActivities(
             moodDisplaySymbol: params.includeMood ? slot.moodDisplaySymbol : null,
             notes: slot.notes,
           },
-        });
-        totalCopied++;
-      }
+        })
+      );
     }
-  });
+  }
 
-  return { copiedCount: totalCopied };
+  if (ops.length > 0) {
+    await prisma.$transaction(ops);
+  }
+
+  return { copiedCount: ops.length };
 }
 
 /**
@@ -334,21 +340,24 @@ export async function applyTemplateToDays(
   if (!template) throw new Error('Template not found');
 
   const slotsData: Record<string, string> = JSON.parse(template.scheduleData);
-  let count = 0;
+  const targetDateUtcs = params.targetDatesYmd.map((d) => parseYmdToUtcDate(d));
+  const existing = await prisma.cbtActivity.findMany({
+    where: { userId: sessionUserId, recordDate: { in: targetDateUtcs } },
+  });
+  const existingKeys = new Set(
+    existing.map((e) => `${formatUtcDateToYmd(e.recordDate)}_${e.hourSlot}`)
+  );
 
-  await prisma.$transaction(async (tx) => {
-    for (const dateYmd of params.targetDatesYmd) {
-      const dateUtc = parseYmdToUtcDate(dateYmd);
-      const existing = await tx.cbtActivity.findMany({
-        where: { userId: sessionUserId, recordDate: dateUtc },
-      });
-      const existingHours = new Set(existing.map((e) => e.hourSlot));
+  const ops = [];
+  for (const dateYmd of params.targetDatesYmd) {
+    const dateUtc = parseYmdToUtcDate(dateYmd);
 
-      for (const [hourStr, actName] of Object.entries(slotsData)) {
-        const hour = Number(hourStr);
-        if (existingHours.has(hour) && !params.overwriteNonEmpty) continue;
+    for (const [hourStr, actName] of Object.entries(slotsData)) {
+      const hour = Number(hourStr);
+      if (existingKeys.has(`${dateYmd}_${hour}`) && !params.overwriteNonEmpty) continue;
 
-        await tx.cbtActivity.upsert({
+      ops.push(
+        prisma.cbtActivity.upsert({
           where: {
             userId_recordDate_hourSlot: {
               userId: sessionUserId,
@@ -371,13 +380,16 @@ export async function applyTemplateToDays(
             moodRawLevel: null,
             moodDisplaySymbol: null,
           },
-        });
-        count++;
-      }
+        })
+      );
     }
-  });
+  }
 
-  return { appliedCount: count };
+  if (ops.length > 0) {
+    await prisma.$transaction(ops);
+  }
+
+  return { appliedCount: ops.length };
 }
 
 /**
@@ -531,47 +543,46 @@ export async function applyActivityRange(
   // 明示的に指定された場合のみ元の活動名として採用 (未指定時は推定せず、新規一括入力として既存枠をすべて保護)
   const originalActivity = params.originalActivityName ? params.originalActivityName.trim() : '';
 
-  let totalApplied = 0;
+  // 既存スロットを一括取得して保護判定 (キー -> 既存の活動名)
+  const existingSlots = await prisma.cbtActivity.findMany({
+    where: {
+      userId: sessionUserId,
+      recordDate: { in: affectedDateUtcs },
+    },
+  });
 
-  await prisma.$transaction(async (tx) => {
-    // 既存スロットを一括取得して保護判定 (キー -> 既存の活動名)
-    const existingSlots = await tx.cbtActivity.findMany({
-      where: {
-        userId: sessionUserId,
-        recordDate: { in: affectedDateUtcs },
-      },
-    });
+  const existingMap = new Map<string, string>();
+  for (const s of existingSlots) {
+    existingMap.set(`${formatUtcDateToYmd(s.recordDate)}_${s.hourSlot}`, s.activityName);
+  }
 
-    const existingMap = new Map<string, string>();
-    for (const s of existingSlots) {
-      existingMap.set(`${formatUtcDateToYmd(s.recordDate)}_${s.hourSlot}`, s.activityName);
+  // 連続ブロック追跡: 先頭から同名活動が連続している間のみ同一ブロックと判定
+  let inContinuousBlock = true;
+  const ops = [];
+
+  for (const item of targetSlots) {
+    const key = `${item.targetYmd}_${item.targetHour}`;
+    const existingAct = existingMap.get(key);
+    const exists = existingAct !== undefined;
+
+    const matchesOriginal = originalActivity !== '' && exists && existingAct.trim() === originalActivity;
+    if (!matchesOriginal) {
+      inContinuousBlock = false;
+    }
+    // 同一活動ブロックの判定: 元の活動名と一致し、かつ先頭から連続している枠のみ同一ブロックとみなす
+    const isSameBlock = inContinuousBlock && matchesOriginal;
+
+    // 保護判定: 既存枠が存在し、上書き不許可で、同一ブロックでもない枠はスキップ
+    const shouldProtect = exists && !params.overwriteNonEmpty && !isSameBlock;
+
+    if (shouldProtect) {
+      if (!params.allowFirstSlotOverwrite || !item.isFirst) {
+        continue;
+      }
     }
 
-    // 連続ブロック追跡: 先頭から同名活動が連続している間のみ同一ブロックと判定
-    let inContinuousBlock = true;
-
-    for (const item of targetSlots) {
-      const key = `${item.targetYmd}_${item.targetHour}`;
-      const existingAct = existingMap.get(key);
-      const exists = existingAct !== undefined;
-
-      const matchesOriginal = originalActivity !== '' && exists && existingAct.trim() === originalActivity;
-      if (!matchesOriginal) {
-        inContinuousBlock = false;
-      }
-      // 同一活動ブロックの判定: 元の活動名と一致し、かつ先頭から連続している枠のみ同一ブロックとみなす
-      const isSameBlock = inContinuousBlock && matchesOriginal;
-
-      // 保護判定: 既存枠が存在し、上書き不許可で、同一ブロックでもない枠はスキップ
-      const shouldProtect = exists && !params.overwriteNonEmpty && !isSameBlock;
-      
-      if (shouldProtect) {
-        if (!params.allowFirstSlotOverwrite || !item.isFirst) {
-          continue;
-        }
-      }
-
-      await tx.cbtActivity.upsert({
+    ops.push(
+      prisma.cbtActivity.upsert({
         where: {
           userId_recordDate_hourSlot: {
             userId: sessionUserId,
@@ -596,13 +607,16 @@ export async function applyActivityRange(
           moodDisplaySymbol: params.moodDisplaySymbol,
           notes: params.notes ?? null,
         },
-      });
-      totalApplied++;
-    }
-  });
+      })
+    );
+  }
+
+  if (ops.length > 0) {
+    await prisma.$transaction(ops);
+  }
 
   return {
-    appliedCount: totalApplied,
+    appliedCount: ops.length,
     affectedDates: Array.from(affectedDatesSet),
   };
 }

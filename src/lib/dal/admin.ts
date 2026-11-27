@@ -206,11 +206,14 @@ export async function inviteMemberByAdmin(
   const rawInviteToken = randomBytesHex(32);
   const hashedToken = await sha256Hex(rawInviteToken);
   const tokenExpiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48時間有効
+  const newUserId = globalThis.crypto.randomUUID();
+  const memoUpdatedAt = new Date();
 
-  const member = await prisma.$transaction(async (tx) => {
+  const [newUser, relation] = await prisma.$transaction([
     // 1. 仮登録ユーザー作成 (ステータス: invited)
-    const newUser = await tx.user.create({
+    prisma.user.create({
       data: {
+        id: newUserId,
         email,
         passwordHash: 'INVITED_PENDING_PASSWORD',
         role: 'member',
@@ -234,35 +237,34 @@ export async function inviteMemberByAdmin(
       include: {
         profile: true,
       },
-    });
-
+    }),
     // 2. 担当管理者とのリレーション作成
-    const relation = await tx.adminMemberRelation.create({
+    prisma.adminMemberRelation.create({
       data: {
         adminId: sessionAdminId,
-        memberId: newUser.id,
+        memberId: newUserId,
         supportStatus: params.supportStatus || 'active',
         isVisible: true,
         adminMemo: '仮登録完了。初回パスワード設定待ち。',
-        memoUpdatedAt: new Date(),
+        memoUpdatedAt,
         memoUpdatedBy: '管理者仮登録',
       },
-    });
+    }),
+  ]);
 
-    return {
-      id: newUser.id,
-      name: newUser.profile?.displayName ?? displayName,
-      email: newUser.email,
-      avatarColor: newUser.profile?.avatarColor ?? 'bg-indigo-100 text-indigo-800',
-      supportStatus: relation.supportStatus,
-      isVisible: relation.isVisible,
-      status: newUser.status,
-      lastRecordDate: '招待中（未記録）',
-      adminMemo: relation.adminMemo,
-      memoUpdatedAt: relation.memoUpdatedAt ? relation.memoUpdatedAt.toISOString() : null,
-      memoUpdatedBy: relation.memoUpdatedBy,
-    };
-  });
+  const member: MemberSummaryDTO = {
+    id: newUser.id,
+    name: newUser.profile?.displayName ?? displayName,
+    email: newUser.email,
+    avatarColor: newUser.profile?.avatarColor ?? 'bg-indigo-100 text-indigo-800',
+    supportStatus: relation.supportStatus,
+    isVisible: relation.isVisible,
+    status: newUser.status,
+    lastRecordDate: '招待中（未記録）',
+    adminMemo: relation.adminMemo,
+    memoUpdatedAt: relation.memoUpdatedAt ? relation.memoUpdatedAt.toISOString() : null,
+    memoUpdatedBy: relation.memoUpdatedBy,
+  };
 
   return {
     member,

@@ -3,6 +3,7 @@
 
 interface RateLimitRecord {
   timestamps: number[];
+  windowMs: number;
 }
 
 const MAX_ENTRIES = 10000;
@@ -18,7 +19,7 @@ function cleanupStaleEntries(now: number): void {
   if (now - lastCleanupTime < CLEANUP_INTERVAL_MS) return;
   lastCleanupTime = now;
   rateLimitMap.forEach((record, key) => {
-    record.timestamps = record.timestamps.filter((t: number) => now - t < 60000);
+    record.timestamps = record.timestamps.filter((t: number) => now - t < record.windowMs);
     if (record.timestamps.length === 0) {
       rateLimitMap.delete(key);
     }
@@ -47,10 +48,11 @@ export function checkRateLimit(
       const oldestKey = rateLimitMap.keys().next().value;
       if (oldestKey) rateLimitMap.delete(oldestKey);
     }
-    record = { timestamps: [] };
+    record = { timestamps: [], windowMs };
     rateLimitMap.set(safeId, record);
   } else {
     // Map の順序を最新にリフレッシュ (LRU動作)
+    record.windowMs = windowMs;
     rateLimitMap.delete(safeId);
     rateLimitMap.set(safeId, record);
   }

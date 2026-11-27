@@ -69,7 +69,8 @@ export interface SessionUser {
  * パスワードを Argon2id (Node.js環境) または PBKDF2 (Cloudflare Edge環境) で安全にハッシュ化
  */
 export async function hashPassword(password: string): Promise<string> {
-  const argon2Module = getArgon2Module();
+  const preferPbkdf2 = getEnvVar('PREFER_PBKDF2_HASH') === 'true';
+  const argon2Module = preferPbkdf2 ? null : getArgon2Module();
   if (argon2Module) {
     try {
       return await argon2Module.hash(password, {
@@ -102,6 +103,9 @@ export async function verifyPassword(password: string, storedHash: string): Prom
         return false;
       }
     }
+    // Edge Runtime 等でネイティブ Argon2 が利用不可の場合もタイミング均等化のためダミー PBKDF2 計算を実行
+    await pbkdf2Hex(password, 'edge-argon2-dummy-salt', 100000, 32);
+    console.warn('[auth] Argon2 hash cannot be verified in Edge Runtime; pre-migration to PBKDF2 is required.');
     return false;
   }
 
