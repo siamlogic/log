@@ -83,9 +83,13 @@ export function getD1Binding(): D1DatabaseLike | null {
 
 function getLocalPrismaClient(): PrismaClient {
   if (!globalForPrisma.prisma) {
-    globalForPrisma.prisma = new PrismaClient({
+    const client = new PrismaClient({
       log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
     });
+    // 単一サーバー SQLite 運用時の WAL モード・ロック待機時間を確実に有効化
+    void client.$queryRawUnsafe('PRAGMA journal_mode = WAL;').catch(() => {});
+    void client.$executeRawUnsafe('PRAGMA busy_timeout = 5000;').catch(() => {});
+    globalForPrisma.prisma = client;
   }
   return globalForPrisma.prisma;
 }
