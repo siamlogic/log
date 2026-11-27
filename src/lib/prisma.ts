@@ -60,9 +60,32 @@ class SchemaAwarePrismaD1 extends PrismaD1 {
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
+  walConfirmed?: boolean;
+  walInitPromise?: Promise<void> | null;
 };
 
 const d1ClientCache = new WeakMap<object, PrismaClient>();
+
+function ensureLocalSqliteWal(client: PrismaClient): void {
+  if (globalForPrisma.walConfirmed || globalForPrisma.walInitPromise) return;
+  globalForPrisma.walInitPromise = (async () => {
+    try {
+      const rows = await client.$queryRawUnsafe<Array<{ journal_mode?: string }>>(
+        'PRAGMA journal_mode = WAL;'
+      );
+      await client.$executeRawUnsafe('PRAGMA busy_timeout = 5000;');
+      const mode =
+        Array.isArray(rows) && rows[0] ? String(rows[0].journal_mode ?? '').toLowerCase() : '';
+      if (mode === 'wal') {
+        globalForPrisma.walConfirmed = true;
+      }
+    } catch {
+      // ロック競合等で失敗した場合は次回呼び出し時に再試行
+    } finally {
+      globalForPrisma.walInitPromise = null;
+    }
+  })();
+}
 
 /**
  * Cloudflare D1 バインディングが存在する場合にネイティブ D1 インスタンスを返す
@@ -83,14 +106,11 @@ export function getD1Binding(): D1DatabaseLike | null {
 
 function getLocalPrismaClient(): PrismaClient {
   if (!globalForPrisma.prisma) {
-    const client = new PrismaClient({
+    globalForPrisma.prisma = new PrismaClient({
       log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
     });
-    // 単一サーバー SQLite 運用時の WAL モード・ロック待機時間を確実に有効化
-    void client.$queryRawUnsafe('PRAGMA journal_mode = WAL;').catch(() => {});
-    void client.$executeRawUnsafe('PRAGMA busy_timeout = 5000;').catch(() => {});
-    globalForPrisma.prisma = client;
   }
+  ensureLocalSqliteWal(globalForPrisma.prisma);
   return globalForPrisma.prisma;
 }
 

@@ -136,10 +136,11 @@ npx wrangler pages deploy .vercel/output/static --branch=preview
 `AGENTS.md` および `docs/requirements_specification.md` に準拠し、**単一サーバー・単一インスタンス、Docker非使用、ローカル SQLite 3（WALモード）** で本番運用するための標準構成手順です（モデル B）。
 
 ```bash
-# 0. ローカル実行用の環境変数設定 (.env 作成)
+# 0. ローカル実行用の環境変数設定 (.env 作成: ※新規環境のみ実施)
 # ※Cloudflare ダッシュボードの環境変数はローカル Node.js プロセスには引き継がれません
-cp .env.example .env
-# プロジェクト直下の .env に以下を設定してください:
+# ※重要: 再デプロイ時は既存の .env（特に MFA_ENCRYPTION_KEY / NEXTAUTH_SECRET）を上書きせず維持してください
+[ -f .env ] || cp .env.example .env
+# 新規作成時のみ、プロジェクト直下の .env に以下を設定してください:
 # - DATABASE_URL="file:./prod.db" (本番用ローカル SQLite ファイルを指す file: 形式)
 # - NEXTAUTH_SECRET="<openssl rand -hex 32 で生成した値>"
 # - MFA_ENCRYPTION_KEY="<上記とは独立に openssl rand -hex 32 で生成した値>"
