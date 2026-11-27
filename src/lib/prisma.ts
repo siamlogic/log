@@ -4,13 +4,58 @@ import { getRuntimeEnv } from './cf-env';
 
 type D1Binding = ConstructorParameters<typeof PrismaD1>[0];
 
+// @prisma/driver-adapter-utils ColumnTypeEnum 定義 (Text=7, DateTime=10)
+const COLUMN_TYPE_TEXT = 7;
+const COLUMN_TYPE_DATETIME = 10;
+
+// Prisma スキーマ上で DateTime 型として定義されているカラム名一覧
+// これ以外の自由記述 TEXT 列 (notes, activity_name 等) が ISO 日時文字列を含んでも DateTime と誤推論されないよう保護
+const DATETIME_COLUMN_NAMES = new Set([
+  'record_date',
+  'created_at',
+  'updated_at',
+  'locked_until',
+  'reset_expires_at',
+  'memo_updated_at',
+]);
+
 export interface D1PreparedStatementLike {
   bind: (...values: unknown[]) => D1PreparedStatementLike;
 }
 
+export interface D1BatchResultLike {
+  meta?: {
+    changes?: number;
+  };
+}
+
 export interface D1DatabaseLike {
   prepare: (query: string) => D1PreparedStatementLike;
-  batch: <T = unknown>(statements: D1PreparedStatementLike[]) => Promise<T[]>;
+  batch: <T = D1BatchResultLike>(statements: D1PreparedStatementLike[]) => Promise<T[]>;
+}
+
+/**
+ * Prisma 5.22 SQLite / D1 driver adapter 互換の UTC 日時文字列 (秒精度・+00:00) を生成
+ */
+export function formatPrismaSqliteDate(date: Date): string {
+  return date.toISOString().replace(/\.\d{3}Z$/, '+00:00');
+}
+
+class SchemaAwarePrismaD1 extends PrismaD1 {
+  async queryRaw(query: Parameters<PrismaD1['queryRaw']>[0]) {
+    const result = await super.queryRaw(query);
+    return result.map((resultSet) => {
+      for (let i = 0; i < resultSet.columnNames.length; i++) {
+        if (
+          resultSet.columnTypes[i] === COLUMN_TYPE_DATETIME &&
+          !DATETIME_COLUMN_NAMES.has(resultSet.columnNames[i])
+        ) {
+          resultSet.columnTypes[i] = COLUMN_TYPE_TEXT;
+        }
+      }
+      return resultSet;
+    });
+  }
 }
 
 const globalForPrisma = globalThis as unknown as {
@@ -51,7 +96,7 @@ function getActivePrismaClient(): PrismaClient {
     const dbObj = d1 as unknown as object;
     let client = d1ClientCache.get(dbObj);
     if (!client) {
-      const adapter = new PrismaD1(dbObj as D1Binding);
+      const adapter = new SchemaAwarePrismaD1(dbObj as D1Binding);
       client = new PrismaClient({
         adapter,
         log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],

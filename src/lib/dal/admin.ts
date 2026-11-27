@@ -1,5 +1,5 @@
 import 'server-only';
-import { getD1Binding, prisma } from '../prisma';
+import { formatPrismaSqliteDate, getD1Binding, prisma } from '../prisma';
 import { randomBytesHex, sha256Hex } from '../web-crypto';
 import { getWeekActivitiesForUser } from './cbt';
 import type { MemberSummaryDTO, WeekActivitiesDTO } from './types';
@@ -209,7 +209,9 @@ export async function inviteMemberByAdmin(
   const newUserId = globalThis.crypto.randomUUID();
   const relationId = globalThis.crypto.randomUUID();
   const now = new Date();
+  const nowSqlite = formatPrismaSqliteDate(now);
   const nowIso = now.toISOString();
+  const expiresSqlite = formatPrismaSqliteDate(tokenExpiresAt);
   const supportStatus = params.supportStatus || 'active';
   const adminMemo = '仮登録完了。初回パスワード設定待ち。';
   const memoUpdatedBy = '管理者仮登録';
@@ -230,20 +232,20 @@ export async function inviteMemberByAdmin(
           'member',
           'invited',
           hashedToken,
-          tokenExpiresAt.toISOString(),
-          nowIso,
-          nowIso
+          expiresSqlite,
+          nowSqlite,
+          nowSqlite
         ),
       d1
         .prepare(
           'INSERT INTO "user_profiles" ("user_id", "display_name", "avatar_color", "created_at", "updated_at") VALUES (?, ?, ?, ?, ?)'
         )
-        .bind(newUserId, displayName, avatarColor, nowIso, nowIso),
+        .bind(newUserId, displayName, avatarColor, nowSqlite, nowSqlite),
       d1
         .prepare(
           'INSERT INTO "mood_configurations" ("user_id", "emotion_label", "style_type", "scale_steps", "created_at", "updated_at") VALUES (?, ?, ?, ?, ?, ?)'
         )
-        .bind(newUserId, '気分の良さ', 'weather', 5, nowIso, nowIso),
+        .bind(newUserId, '気分の良さ', 'weather', 5, nowSqlite, nowSqlite),
       d1
         .prepare(
           'INSERT INTO "admin_member_relations" ("id", "admin_id", "member_id", "support_status", "is_visible", "admin_memo", "memo_updated_at", "memo_updated_by", "created_at", "updated_at") VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)'
@@ -254,10 +256,10 @@ export async function inviteMemberByAdmin(
           newUserId,
           supportStatus,
           adminMemo,
-          nowIso,
+          nowSqlite,
           memoUpdatedBy,
-          nowIso,
-          nowIso
+          nowSqlite,
+          nowSqlite
         ),
     ]);
 

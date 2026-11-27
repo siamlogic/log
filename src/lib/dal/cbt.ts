@@ -1,5 +1,5 @@
 import 'server-only';
-import { getD1Binding, prisma } from '../prisma';
+import { formatPrismaSqliteDate, getD1Binding, prisma } from '../prisma';
 import { parseYmdToUtcDate, formatUtcDateToYmd, generateWeekDays } from '../date-utils';
 import type { WeekActivitiesDTO, DayActivitiesDTO, ActivitySlotDTO, MoodConfigDTO, ActivityTemplateDTO } from './types';
 
@@ -29,16 +29,17 @@ type CbtActivityWriteOp =
     };
 
 /**
- * 複数スロット書込みをローカル SQLite ($transaction) または Cloudflare D1 (ネイティブ DB.batch) で原子的に実行
+ * 複数スロット書込みをローカル SQLite ($transaction) または Cloudflare D1 (ネイティブ DB.batch) で原子的に実行し、
+ * 実際に適用・変更された件数を返す
  */
-async function executeCbtActivityBatch(writes: CbtActivityWriteOp[]): Promise<void> {
-  if (writes.length === 0) return;
+async function executeCbtActivityBatch(writes: CbtActivityWriteOp[]): Promise<number> {
+  if (writes.length === 0) return 0;
 
   const d1 = getD1Binding();
   if (d1) {
-    const nowIso = new Date().toISOString();
+    const nowSqlite = formatPrismaSqliteDate(new Date());
     const statements = writes.map((w) => {
-      const recordDateIso = w.recordDate.toISOString();
+      const recordDateSqlite = formatPrismaSqliteDate(w.recordDate);
       if (w.mode === 'update_if_activity_matches') {
         return d1
           .prepare(
@@ -50,9 +51,9 @@ async function executeCbtActivityBatch(writes: CbtActivityWriteOp[]): Promise<vo
             w.moodRawLevel,
             w.moodDisplaySymbol,
             w.notes,
-            nowIso,
+            nowSqlite,
             w.userId,
-            recordDateIso,
+            recordDateSqlite,
             w.hourSlot,
             w.expectedActivityName
           );
@@ -68,15 +69,15 @@ async function executeCbtActivityBatch(writes: CbtActivityWriteOp[]): Promise<vo
           .bind(
             id,
             w.userId,
-            recordDateIso,
+            recordDateSqlite,
             w.hourSlot,
             w.activityName,
             w.moodScore,
             w.moodRawLevel,
             w.moodDisplaySymbol,
             notesValue,
-            nowIso,
-            nowIso
+            nowSqlite,
+            nowSqlite
           );
       }
 
@@ -88,22 +89,23 @@ async function executeCbtActivityBatch(writes: CbtActivityWriteOp[]): Promise<vo
         .bind(
           id,
           w.userId,
-          recordDateIso,
+          recordDateSqlite,
           w.hourSlot,
           w.activityName,
           w.moodScore,
           w.moodRawLevel,
           w.moodDisplaySymbol,
           notesValue,
-          nowIso,
-          nowIso
+          nowSqlite,
+          nowSqlite
         );
     });
 
-    await d1.batch(statements);
-    return;
+    const results = await d1.batch(statements);
+    return results.reduce((sum, r) => sum + Number(r?.meta?.changes ?? 0), 0);
   }
 
+  const now = new Date();
   const ops = writes.map((w) => {
     if (w.mode === 'update_if_activity_matches') {
       return prisma.cbtActivity.updateMany({
@@ -123,6 +125,12 @@ async function executeCbtActivityBatch(writes: CbtActivityWriteOp[]): Promise<vo
       });
     }
 
+    if (w.mode === 'upsert_ignore') {
+      const id = globalThis.crypto.randomUUID();
+      const notesValue = w.notes ?? null;
+      return prisma.$executeRaw`INSERT INTO "cbt_activities" ("id", "user_id", "record_date", "hour_slot", "activity_name", "mood_score", "mood_raw_level", "mood_display_symbol", "notes", "created_at", "updated_at") VALUES (${id}, ${w.userId}, ${w.recordDate}, ${w.hourSlot}, ${w.activityName}, ${w.moodScore}, ${w.moodRawLevel}, ${w.moodDisplaySymbol}, ${notesValue}, ${now}, ${now}) ON CONFLICT("user_id", "record_date", "hour_slot") DO NOTHING`;
+    }
+
     const createData = {
       userId: w.userId,
       recordDate: w.recordDate,
@@ -134,16 +142,13 @@ async function executeCbtActivityBatch(writes: CbtActivityWriteOp[]): Promise<vo
       ...(w.notes !== undefined ? { notes: w.notes } : {}),
     };
 
-    const updateData =
-      w.mode === 'upsert_overwrite'
-        ? {
-            activityName: w.activityName,
-            moodScore: w.moodScore,
-            moodRawLevel: w.moodRawLevel,
-            moodDisplaySymbol: w.moodDisplaySymbol,
-            ...(w.notes !== undefined ? { notes: w.notes } : {}),
-          }
-        : {};
+    const updateData = {
+      activityName: w.activityName,
+      moodScore: w.moodScore,
+      moodRawLevel: w.moodRawLevel,
+      moodDisplaySymbol: w.moodDisplaySymbol,
+      ...(w.notes !== undefined ? { notes: w.notes } : {}),
+    };
 
     return prisma.cbtActivity.upsert({
       where: {
@@ -158,7 +163,18 @@ async function executeCbtActivityBatch(writes: CbtActivityWriteOp[]): Promise<vo
     });
   });
 
-  await prisma.$transaction(ops);
+  const results = await prisma.$transaction(ops);
+  let appliedCount = 0;
+  for (const res of results) {
+    if (typeof res === 'number') {
+      appliedCount += res;
+    } else if (res && typeof (res as { count?: number }).count === 'number') {
+      appliedCount += (res as { count: number }).count;
+    } else {
+      appliedCount += 1;
+    }
+  }
+  return appliedCount;
 }
 
 /**
@@ -361,9 +377,9 @@ export async function copyDayActivities(
     });
   }
 
-  await executeCbtActivityBatch(writes);
+  const copiedCount = await executeCbtActivityBatch(writes);
 
-  return { copiedCount: writes.length };
+  return { copiedCount };
 }
 
 /**
@@ -434,9 +450,9 @@ export async function copyWeekActivities(
     }
   }
 
-  await executeCbtActivityBatch(writes);
+  const copiedCount = await executeCbtActivityBatch(writes);
 
-  return { copiedCount: writes.length };
+  return { copiedCount };
 }
 
 /**
@@ -489,9 +505,9 @@ export async function applyTemplateToDays(
     }
   }
 
-  await executeCbtActivityBatch(writes);
+  const appliedCount = await executeCbtActivityBatch(writes);
 
-  return { appliedCount: writes.length };
+  return { appliedCount };
 }
 
 /**
@@ -726,10 +742,10 @@ export async function applyActivityRange(
     }
   }
 
-  await executeCbtActivityBatch(writes);
+  const appliedCount = await executeCbtActivityBatch(writes);
 
   return {
-    appliedCount: writes.length,
+    appliedCount,
     affectedDates: Array.from(affectedDatesSet),
   };
 }
