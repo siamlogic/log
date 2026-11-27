@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import crypto from 'crypto';
 import { prisma } from '@/lib/prisma';
 import { hashPassword, setSessionCookie, verifySameOrigin } from '@/lib/auth-service';
+import { sha256Hex, timingSafeEqualStr } from '@/lib/web-crypto';
 import { logAudit } from '@/lib/audit';
 import { checkRateLimit } from '@/lib/rate-limit';
 
@@ -79,11 +79,9 @@ export async function POST(req: Request) {
     }
 
     // トークン検証 (SHA-256 ハッシュを一定時間突合)
-    const inputTokenHash = crypto.createHash('sha256').update(cleanToken).digest('hex');
-    const inputBuf = Buffer.from(inputTokenHash);
-    const expectedBuf = Buffer.from(user.resetToken);
+    const inputTokenHash = await sha256Hex(cleanToken);
 
-    if (inputBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(inputBuf, expectedBuf)) {
+    if (!timingSafeEqualStr(inputTokenHash, user.resetToken)) {
       const attempts = user.failedLoginAttempts + 1;
       const willLock = attempts >= 5;
       await prisma.user.update({
@@ -126,7 +124,7 @@ export async function POST(req: Request) {
     };
 
     // 自動ログイン (セッションCookie発行)
-    setSessionCookie(sessionUser);
+    await setSessionCookie(sessionUser);
 
     // 監査ログ記録 (機微情報・平文メールアドレス等のPIIは除外)
     await logAudit({

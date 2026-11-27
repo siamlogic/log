@@ -148,8 +148,8 @@ export async function POST(req: Request) {
       // 1. 6桁数字の場合は TOTP 検証
       if (/^\d{6}$/.test(rawCode) && user.mfaSecret) {
         try {
-          const secretBase32 = decryptMfaSecret(user.mfaSecret);
-          const totpResult = verifyTOTP(secretBase32, rawCode, user.lastTotpStep);
+          const secretBase32 = await decryptMfaSecret(user.mfaSecret);
+          const totpResult = await verifyTOTP(secretBase32, rawCode, user.lastTotpStep);
           if (totpResult.valid && totpResult.verifiedStep) {
             mfaValid = true;
             nextLastTotpStep = totpResult.verifiedStep;
@@ -163,7 +163,7 @@ export async function POST(req: Request) {
 
       // 2. TOTP で一致しない場合、リカバリーコードとして検証
       if (!mfaValid && !replayError && user.mfaRecoveryCodes) {
-        const recResult = verifyRecoveryCode(rawCode, user.mfaRecoveryCodes);
+        const recResult = await verifyRecoveryCode(rawCode, user.mfaRecoveryCodes);
         if (recResult.valid) {
           mfaValid = true;
           nextRecoveryCodesJson = recResult.remainingHashesJson ?? null;
@@ -248,7 +248,7 @@ export async function POST(req: Request) {
       tokenVersion: user.tokenVersion,
     };
 
-    setSessionCookie(sessionUser);
+    await setSessionCookie(sessionUser);
 
     await logAudit({
       actorId: user.id,

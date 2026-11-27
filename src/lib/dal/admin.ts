@@ -1,6 +1,6 @@
 import 'server-only';
-import crypto from 'crypto';
 import { prisma } from '../prisma';
+import { randomBytesHex, sha256Hex } from '../web-crypto';
 import { getWeekActivitiesForUser } from './cbt';
 import type { MemberSummaryDTO, WeekActivitiesDTO } from './types';
 
@@ -203,8 +203,8 @@ export async function inviteMemberByAdmin(
   }
 
   // 招待用セキュアトークン生成 (32バイト hex = 64文字)
-  const rawInviteToken = crypto.randomBytes(32).toString('hex');
-  const hashedToken = crypto.createHash('sha256').update(rawInviteToken).digest('hex');
+  const rawInviteToken = randomBytesHex(32);
+  const hashedToken = await sha256Hex(rawInviteToken);
   const tokenExpiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48時間有効
 
   const member = await prisma.$transaction(async (tx) => {
