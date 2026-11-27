@@ -8,8 +8,8 @@ pages_build_output_dir = ".vercel/output/static"
 [vars]
 NODE_ENV = "production"
 
-# Cloudflare D1 データベースバインディング (エッジでD1を使用する場合に有効化)
-# [[d1_databases]]
+# Cloudflare D1 データベースバインディング (Preview 検証環境で D1 を使用する場合のみ有効化; 本番には設定しない)
+# [[env.preview.d1_databases]]
 # binding = "DB"
-# database_name = "cbt_production_db"
-# database_id = "<YOUR_D1_DATABASE_ID>"
+# database_name = "cbt_preview_db"
+# database_id = "<YOUR_PREVIEW_D1_DATABASE_ID>"

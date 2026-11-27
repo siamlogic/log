@@ -5,6 +5,16 @@ const nextConfig = {
   experimental: {
     serverComponentsExternalPackages: ['@node-rs/argon2'],
   },
+  webpack: (config, { nextRuntime }) => {
+    if (nextRuntime === 'edge') {
+      // Edge Runtime (Cloudflare Pages Functions) ではネイティブバイナリを除外し PBKDF2 へフォールバック
+      config.resolve.alias = {
+        ...(config.resolve.alias || {}),
+        '@node-rs/argon2': false,
+      };
+    }
+    return config;
+  },
   async headers() {
     return [
       {

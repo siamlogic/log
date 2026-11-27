@@ -43,8 +43,17 @@ async function main() {
   await prisma.activityTemplate.deleteMany();
   await prisma.user.deleteMany();
 
-  // 2. ユーザー作成 (Argon2id ハッシュ)
-  const defaultPwHash = await argon2.hash('password123');
+  // 2. ユーザー作成 (デフォルトは Argon2id、D1/Edge 移行時は SEED_HASH_ALGO=pbkdf2 または --pbkdf2 で PBKDF2 を使用)
+  const usePbkdf2 = process.env.SEED_HASH_ALGO === 'pbkdf2' || process.argv.includes('--pbkdf2');
+  let defaultPwHash;
+  if (usePbkdf2) {
+    const salt = crypto.randomBytes(16).toString('hex');
+    const derived = crypto.pbkdf2Sync('password123', salt, 100000, 32, 'sha256').toString('hex');
+    defaultPwHash = `$pbkdf2$100000$${salt}$${derived}`;
+    console.log('Using PBKDF2-SHA256 password hashes (Cloudflare D1 / Edge Runtime compatible).');
+  } else {
+    defaultPwHash = await argon2.hash('password123');
+  }
 
   // メンバー1: 田中 太郎
   const userMember1 = await prisma.user.create({

@@ -1,20 +1,29 @@
-import crypto from 'crypto';
+import { getEnvVar } from './cf-env';
+import {
+  aes256GcmDecrypt,
+  aes256GcmEncrypt,
+  hexToBytes,
+  hmacBytes,
+  sha256Hex,
+  timingSafeEqualStr,
+} from './web-crypto';
 
-function getMasterKeyBuffer(): Buffer {
-  const envKey = process.env.MFA_ENCRYPTION_KEY;
+function getMasterKeyBytes(): Uint8Array {
+  const envKey = getEnvVar('MFA_ENCRYPTION_KEY');
+  const nodeEnv = getEnvVar('NODE_ENV') ?? process.env.NODE_ENV;
   if (!envKey || envKey.length !== 64) {
-    if (process.env.NODE_ENV === 'production') {
+    if (nodeEnv === 'production') {
       throw new Error('FATAL: MFA_ENCRYPTION_KEY must be set to a 64-character hex string (32 bytes) in production.');
     }
-    return Buffer.from('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef', 'hex');
+    return hexToBytes('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef');
   }
-  return Buffer.from(envKey, 'hex');
+  return hexToBytes(envKey);
 }
 
 /**
  * Base32 デコード (RFC 4648)
  */
-export function base32Decode(base32: string): Buffer {
+export function base32Decode(base32: string): Uint8Array {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
   const clean = base32.toUpperCase().replace(/=+$/, '').replace(/\s+/g, '');
   let bits = 0;
@@ -30,13 +39,13 @@ export function base32Decode(base32: string): Buffer {
       bits -= 8;
     }
   }
-  return Buffer.from(bytes);
+  return new Uint8Array(bytes);
 }
 
 /**
  * Base32 エンコード (RFC 4648)
  */
-export function base32Encode(buffer: Buffer): string {
+export function base32Encode(buffer: Uint8Array): string {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
   let bits = 0;
   let value = 0;
@@ -59,20 +68,17 @@ export function base32Encode(buffer: Buffer): string {
  * AES-256-GCM による MFA 秘密鍵の暗号化
  * 出力形式: v1:ivHex:tagHex:encryptedHex (将来の鍵ローテーション対応)
  */
-export function encryptMfaSecret(secret: string): string {
-  const masterKey = getMasterKeyBuffer();
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', masterKey, iv);
-  const encrypted = Buffer.concat([cipher.update(secret, 'utf8'), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return `v1:${iv.toString('hex')}:${tag.toString('hex')}:${encrypted.toString('hex')}`;
+export async function encryptMfaSecret(secret: string): Promise<string> {
+  const masterKey = getMasterKeyBytes();
+  const { ivHex, tagHex, dataHex } = await aes256GcmEncrypt(masterKey, secret);
+  return `v1:${ivHex}:${tagHex}:${dataHex}`;
 }
 
 /**
  * AES-256-GCM による MFA 秘密鍵の復号
  */
-export function decryptMfaSecret(encryptedPayload: string): string {
-  const masterKey = getMasterKeyBuffer();
+export async function decryptMfaSecret(encryptedPayload: string): Promise<string> {
+  const masterKey = getMasterKeyBytes();
   const parts = encryptedPayload.split(':');
   if (parts.length !== 4) {
     throw new Error('Invalid encrypted MFA secret format.');
@@ -81,25 +87,23 @@ export function decryptMfaSecret(encryptedPayload: string): string {
   if (version !== 'v1') {
     throw new Error(`Unsupported encryption version: ${version}`);
   }
-  const iv = Buffer.from(ivHex, 'hex');
-  const tag = Buffer.from(tagHex, 'hex');
-  const data = Buffer.from(dataHex, 'hex');
-  const decipher = crypto.createDecipheriv('aes-256-gcm', masterKey, iv);
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
+  return aes256GcmDecrypt(masterKey, ivHex, tagHex, dataHex);
 }
 
 /**
  * RFC 6238 準拠の TOTP コード生成 (6桁、30秒ステップ、HMAC-SHA1)
  */
-export function generateTOTP(secretBase32: string, timeStep?: number): string {
+export async function generateTOTP(secretBase32: string, timeStep?: number): Promise<string> {
   const step = timeStep ?? Math.floor(Date.now() / 1000 / 30);
   const key = base32Decode(secretBase32);
-  const buf = Buffer.alloc(8);
-  buf.writeBigUInt64BE(BigInt(step), 0);
-  const hmac = crypto.createHmac('sha1', key).update(buf).digest();
+  const buf = new Uint8Array(8);
+  const view = new DataView(buf.buffer);
+  view.setBigUint64(0, BigInt(step), false);
+
+  const hmac = await hmacBytes('SHA-1', key, buf);
   const offset = hmac[hmac.length - 1] & 0x0f;
-  const code = (hmac.readUInt32BE(offset) & 0x7fffffff) % 1000000;
+  const hmacView = new DataView(hmac.buffer, hmac.byteOffset, hmac.byteLength);
+  const code = (hmacView.getUint32(offset, false) & 0x7fffffff) % 1000000;
   return code.toString().padStart(6, '0');
 }
 
@@ -108,11 +112,11 @@ export function generateTOTP(secretBase32: string, timeStep?: number): string {
  * - 許容範囲: 前後 ±1 ステップ (計 90 秒)
  * - リプレイ攻撃防止: 最後に検証されたステップ (lastTotpStep) 以下のステップは再利用拒否
  */
-export function verifyTOTP(
+export async function verifyTOTP(
   secretBase32: string,
   token: string,
   lastTotpStep?: bigint | number | null
-): { valid: boolean; verifiedStep?: bigint; error?: string } {
+): Promise<{ valid: boolean; verifiedStep?: bigint; error?: string }> {
   const cleanedToken = token.trim().replace(/\s+/g, '');
   if (!/^\d{6}$/.test(cleanedToken)) {
     return { valid: false, error: '6桁の数字を入力してください' };
@@ -122,11 +126,8 @@ export function verifyTOTP(
   const stepsToCheck = [currentStep, currentStep - 1, currentStep + 1];
 
   for (const step of stepsToCheck) {
-    const expected = generateTOTP(secretBase32, step);
-    const expectedBuf = Buffer.from(expected);
-    const tokenBuf = Buffer.from(cleanedToken);
-
-    if (tokenBuf.length === expectedBuf.length && crypto.timingSafeEqual(tokenBuf, expectedBuf)) {
+    const expected = await generateTOTP(secretBase32, step);
+    if (timingSafeEqualStr(cleanedToken, expected)) {
       const stepBigInt = BigInt(step);
       if (lastTotpStep !== null && lastTotpStep !== undefined) {
         const lastStepBigInt = BigInt(lastTotpStep);
@@ -147,29 +148,25 @@ export function verifyTOTP(
 /**
  * リカバリーコードの SHA-256 ハッシュ生成
  */
-export function hashRecoveryCode(code: string): string {
+export async function hashRecoveryCode(code: string): Promise<string> {
   const normalized = code.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-  return crypto.createHash('sha256').update(normalized).digest('hex');
+  return sha256Hex(normalized);
 }
 
 /**
  * リカバリーコードの検証 (使い捨て型)
  */
-export function verifyRecoveryCode(
+export async function verifyRecoveryCode(
   code: string,
   storedCodesJson: string | null
-): { valid: boolean; remainingHashesJson?: string } {
+): Promise<{ valid: boolean; remainingHashesJson?: string }> {
   if (!storedCodesJson) return { valid: false };
   try {
     const hashes: string[] = JSON.parse(storedCodesJson);
     if (!Array.isArray(hashes) || hashes.length === 0) return { valid: false };
 
-    const inputHash = hashRecoveryCode(code);
-    const index = hashes.findIndex((h) => {
-      const hBuf = Buffer.from(h, 'hex');
-      const inBuf = Buffer.from(inputHash, 'hex');
-      return hBuf.length === inBuf.length && crypto.timingSafeEqual(hBuf, inBuf);
-    });
+    const inputHash = await hashRecoveryCode(code);
+    const index = hashes.findIndex((h) => timingSafeEqualStr(h, inputHash));
 
     if (index === -1) return { valid: false };
 

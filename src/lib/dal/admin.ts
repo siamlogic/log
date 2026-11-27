@@ -1,6 +1,6 @@
 import 'server-only';
-import crypto from 'crypto';
-import { prisma } from '../prisma';
+import { formatPrismaSqliteDate, getD1Binding, prisma } from '../prisma';
+import { randomBytesHex, sha256Hex } from '../web-crypto';
 import { getWeekActivitiesForUser } from './cbt';
 import type { MemberSummaryDTO, WeekActivitiesDTO } from './types';
 
@@ -203,14 +203,89 @@ export async function inviteMemberByAdmin(
   }
 
   // 招待用セキュアトークン生成 (32バイト hex = 64文字)
-  const rawInviteToken = crypto.randomBytes(32).toString('hex');
-  const hashedToken = crypto.createHash('sha256').update(rawInviteToken).digest('hex');
+  const rawInviteToken = randomBytesHex(32);
+  const hashedToken = await sha256Hex(rawInviteToken);
   const tokenExpiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48時間有効
+  const newUserId = globalThis.crypto.randomUUID();
+  const relationId = globalThis.crypto.randomUUID();
+  const now = new Date();
+  const nowSqlite = formatPrismaSqliteDate(now);
+  const nowIso = now.toISOString();
+  const expiresSqlite = formatPrismaSqliteDate(tokenExpiresAt);
+  const supportStatus = params.supportStatus || 'active';
+  const adminMemo = '仮登録完了。初回パスワード設定待ち。';
+  const memoUpdatedBy = '管理者仮登録';
+  const avatarColor = 'bg-indigo-100 text-indigo-800';
 
-  const member = await prisma.$transaction(async (tx) => {
+  const d1 = getD1Binding();
+  if (d1) {
+    // Cloudflare D1 ではネイティブ DB.batch() により途中失敗時の全件ロールバックを保証
+    await d1.batch([
+      d1
+        .prepare(
+          'INSERT INTO "users" ("id", "email", "password_hash", "role", "status", "failed_login_attempts", "mfa_enabled", "token_version", "reset_token", "reset_expires_at", "created_at", "updated_at") VALUES (?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?)'
+        )
+        .bind(
+          newUserId,
+          email,
+          'INVITED_PENDING_PASSWORD',
+          'member',
+          'invited',
+          hashedToken,
+          expiresSqlite,
+          nowSqlite,
+          nowSqlite
+        ),
+      d1
+        .prepare(
+          'INSERT INTO "user_profiles" ("user_id", "display_name", "avatar_color", "created_at", "updated_at") VALUES (?, ?, ?, ?, ?)'
+        )
+        .bind(newUserId, displayName, avatarColor, nowSqlite, nowSqlite),
+      d1
+        .prepare(
+          'INSERT INTO "mood_configurations" ("user_id", "emotion_label", "style_type", "scale_steps", "created_at", "updated_at") VALUES (?, ?, ?, ?, ?, ?)'
+        )
+        .bind(newUserId, '気分の良さ', 'weather', 5, nowSqlite, nowSqlite),
+      d1
+        .prepare(
+          'INSERT INTO "admin_member_relations" ("id", "admin_id", "member_id", "support_status", "is_visible", "admin_memo", "memo_updated_at", "memo_updated_by", "created_at", "updated_at") VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)'
+        )
+        .bind(
+          relationId,
+          sessionAdminId,
+          newUserId,
+          supportStatus,
+          adminMemo,
+          nowSqlite,
+          memoUpdatedBy,
+          nowSqlite,
+          nowSqlite
+        ),
+    ]);
+
+    return {
+      member: {
+        id: newUserId,
+        name: displayName,
+        email,
+        avatarColor,
+        supportStatus,
+        isVisible: true,
+        status: 'invited',
+        lastRecordDate: '招待中（未記録）',
+        adminMemo,
+        memoUpdatedAt: nowIso,
+        memoUpdatedBy,
+      },
+      inviteToken: rawInviteToken,
+    };
+  }
+
+  const [newUser, relation] = await prisma.$transaction([
     // 1. 仮登録ユーザー作成 (ステータス: invited)
-    const newUser = await tx.user.create({
+    prisma.user.create({
       data: {
+        id: newUserId,
         email,
         passwordHash: 'INVITED_PENDING_PASSWORD',
         role: 'member',
@@ -220,7 +295,7 @@ export async function inviteMemberByAdmin(
         profile: {
           create: {
             displayName,
-            avatarColor: 'bg-indigo-100 text-indigo-800',
+            avatarColor,
           },
         },
         moodConfiguration: {
@@ -234,35 +309,35 @@ export async function inviteMemberByAdmin(
       include: {
         profile: true,
       },
-    });
-
+    }),
     // 2. 担当管理者とのリレーション作成
-    const relation = await tx.adminMemberRelation.create({
+    prisma.adminMemberRelation.create({
       data: {
+        id: relationId,
         adminId: sessionAdminId,
-        memberId: newUser.id,
-        supportStatus: params.supportStatus || 'active',
+        memberId: newUserId,
+        supportStatus,
         isVisible: true,
-        adminMemo: '仮登録完了。初回パスワード設定待ち。',
-        memoUpdatedAt: new Date(),
-        memoUpdatedBy: '管理者仮登録',
+        adminMemo,
+        memoUpdatedAt: now,
+        memoUpdatedBy,
       },
-    });
+    }),
+  ]);
 
-    return {
-      id: newUser.id,
-      name: newUser.profile?.displayName ?? displayName,
-      email: newUser.email,
-      avatarColor: newUser.profile?.avatarColor ?? 'bg-indigo-100 text-indigo-800',
-      supportStatus: relation.supportStatus,
-      isVisible: relation.isVisible,
-      status: newUser.status,
-      lastRecordDate: '招待中（未記録）',
-      adminMemo: relation.adminMemo,
-      memoUpdatedAt: relation.memoUpdatedAt ? relation.memoUpdatedAt.toISOString() : null,
-      memoUpdatedBy: relation.memoUpdatedBy,
-    };
-  });
+  const member: MemberSummaryDTO = {
+    id: newUser.id,
+    name: newUser.profile?.displayName ?? displayName,
+    email: newUser.email,
+    avatarColor: newUser.profile?.avatarColor ?? avatarColor,
+    supportStatus: relation.supportStatus,
+    isVisible: relation.isVisible,
+    status: newUser.status,
+    lastRecordDate: '招待中（未記録）',
+    adminMemo: relation.adminMemo,
+    memoUpdatedAt: relation.memoUpdatedAt ? relation.memoUpdatedAt.toISOString() : null,
+    memoUpdatedBy: relation.memoUpdatedBy,
+  };
 
   return {
     member,

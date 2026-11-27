@@ -3,22 +3,27 @@
 
 interface RateLimitRecord {
   timestamps: number[];
+  windowMs: number;
 }
 
 const MAX_ENTRIES = 10000;
+const CLEANUP_INTERVAL_MS = 300000;
 const rateLimitMap = new Map<string, RateLimitRecord>();
+let lastCleanupTime = 0;
 
-// Clean up stale entries every 5 minutes
-if (typeof setInterval !== 'undefined') {
-  setInterval(() => {
-    const now = Date.now();
-    rateLimitMap.forEach((record, key) => {
-      record.timestamps = record.timestamps.filter((t: number) => now - t < 60000);
-      if (record.timestamps.length === 0) {
-        rateLimitMap.delete(key);
-      }
-    });
-  }, 300000);
+/**
+ * 期限切れエントリの遅延クリーンアップ
+ * (Cloudflare Workers Edge Runtime のグローバルスコープ setInterval 禁止規約に対応)
+ */
+function cleanupStaleEntries(now: number): void {
+  if (now - lastCleanupTime < CLEANUP_INTERVAL_MS) return;
+  lastCleanupTime = now;
+  rateLimitMap.forEach((record, key) => {
+    record.timestamps = record.timestamps.filter((t: number) => now - t < record.windowMs);
+    if (record.timestamps.length === 0) {
+      rateLimitMap.delete(key);
+    }
+  });
 }
 
 export interface RateLimitResult {
@@ -34,6 +39,7 @@ export function checkRateLimit(
 ): RateLimitResult {
   const safeId = typeof identifier === 'string' && identifier.length > 128 ? identifier.slice(0, 128) : (identifier || 'unknown');
   const now = Date.now();
+  cleanupStaleEntries(now);
   let record = rateLimitMap.get(safeId);
 
   if (!record) {
@@ -42,10 +48,11 @@ export function checkRateLimit(
       const oldestKey = rateLimitMap.keys().next().value;
       if (oldestKey) rateLimitMap.delete(oldestKey);
     }
-    record = { timestamps: [] };
+    record = { timestamps: [], windowMs };
     rateLimitMap.set(safeId, record);
   } else {
     // Map の順序を最新にリフレッシュ (LRU動作)
+    record.windowMs = windowMs;
     rateLimitMap.delete(safeId);
     rateLimitMap.set(safeId, record);
   }
