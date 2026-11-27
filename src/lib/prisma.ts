@@ -73,7 +73,7 @@ function ensureLocalSqliteWal(client: PrismaClient): void {
       const rows = await client.$queryRawUnsafe<Array<{ journal_mode?: string }>>(
         'PRAGMA journal_mode = WAL;'
       );
-      await client.$executeRawUnsafe('PRAGMA busy_timeout = 5000;');
+      await client.$queryRawUnsafe('PRAGMA busy_timeout = 5000;');
       const mode =
         Array.isArray(rows) && rows[0] ? String(rows[0].journal_mode ?? '').toLowerCase() : '';
       if (mode === 'wal') {
